@@ -65,8 +65,13 @@ Windows x64，REAPER 7（在 `7.79` 上构建与测试）。
    * **普通安装：** `%APPDATA%\REAPER\UserPlugins\`
 3. 重启 REAPER。
 
-插件带一个设置面板：**Extensions 菜单 → `Smooth Wheel Scroll settings...`**（也可以绑快捷键，
-再按一次即关闭）。面板里有一个缓动总开关，以及 5 个手感参数；改动即时生效、自动保存。
+插件带一个设置面板，两种方式任选一种打开：
+
+1. **Extensions 菜单** → `Smooth Wheel Scroll settings...`
+2. **Actions 窗口**里搜 `Smooth Wheel Scroll`，找到 `Smooth Wheel Scroll: settings...`，
+   可以给它**绑定快捷键**；同一个键**再按一次就关闭**面板。
+
+面板里有一个缓动总开关，以及 5 个手感参数；改动**即时生效、自动保存**，关掉窗口也不会丢。
 不想调的话什么都不用管——默认值就是调好的。
 
 想确认它加载了：看扩展列表或 REAPER 启动日志，插件名会显示为

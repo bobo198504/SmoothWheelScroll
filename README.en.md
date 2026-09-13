@@ -83,10 +83,16 @@ Windows x64, REAPER 7 (built and tested against `7.79`).
    * **Normal install:** `%APPDATA%\REAPER\UserPlugins\`
 3. Restart REAPER.
 
-The plugin ships a settings panel: **Extensions menu → `Smooth Wheel Scroll
-settings...`** (bindable to a key; press again to close). It holds a master
-smoothing switch and five feel parameters, applied live and saved automatically.
-Nothing needs configuring — the defaults are the tuned ones.
+The plugin ships a settings panel. Open it either way:
+
+1. **Extensions menu** → `Smooth Wheel Scroll settings...`
+2. In the **Actions** window, search for `Smooth Wheel Scroll` and use
+   `Smooth Wheel Scroll: settings...` — you can bind it to a key, and pressing that
+   key again closes the panel.
+
+It holds a master smoothing switch and five feel parameters, applied **live** and
+saved automatically, so closing the window keeps them. Nothing needs configuring —
+the defaults are the tuned ones.
 
 To verify it loaded, check the Extensions list or REAPER's startup log; the plugin
 also appears as `Smooth Wheel Scroll 1.3.9`.
