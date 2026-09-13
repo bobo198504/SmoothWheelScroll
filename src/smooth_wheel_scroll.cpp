@@ -404,18 +404,16 @@ static const ActionSpec kActions[] = {
     {0, 1001, false, DRIVE_REPLAY}, // View: Zoom vertically reversed
     // ---- MIDI editor: scroll + zoom, all through the section's own actions
     //      (section->onAction can execute these with a relative value).
-    //      The VERTICAL entries carry pitchQuantized: that whole axis steps in
-    //      discrete units -- scrolling moves in note rows, zooming in whole pixels of
-    //      row height -- so it gets whole-unit delivery. The horizontal axis is
-    //      untouched (see ActionSpec).
-    {32060, 40430, false, DRIVE_REPLAY, false, true}, // View: Zoom vertically
+    //      The two VERTICAL SCROLL entries carry pitchQuantized: the piano roll moves
+    //      in whole note rows, so they get whole-unit delivery (see ActionSpec).
+    {32060, 40430, false, DRIVE_REPLAY}, // View: Zoom vertically
     {32060, 40431, true, DRIVE_REPLAY},  // View: Zoom horizontally
     {32060, 40432, false, DRIVE_REPLAY, false, true}, // View: Scroll vertically
     {32060, 40433, true, DRIVE_REPLAY},  // View: Scroll horizontally
     {32060, 40660, true, DRIVE_REPLAY},  // View: Scroll horizontally reversed
     {32060, 40661, false, DRIVE_REPLAY, false, true}, // View: Scroll vertically reversed
     {32060, 40662, true, DRIVE_REPLAY},  // View: Zoom horizontally reversed
-    {32060, 40663, false, DRIVE_REPLAY, false, true}, // View: Zoom vertically reversed
+    {32060, 40663, false, DRIVE_REPLAY}, // View: Zoom vertically reversed
 };
 
 static bool LookupAction(int section, int command, ActionSpec &out)
@@ -509,12 +507,11 @@ static bool ClassifyByName(KbdSectionInfo *sec, int command, ActionSpec &out)
   out.horizontal = strstr(nm, "horizontally") != nullptr;
   out.drive = DRIVE_REPLAY; // reproduce exactly what the action does
   out.relativeAction = relativeFamily;
-  // The MIDI editor's VERTICAL axis steps in discrete units (scrolling in note rows,
-  // zooming in whole pixels of row height), so it is delivered in whole units
-  // regardless of which path classified it. Keyed on the axis and section, not on a
-  // specific id, so a re-worded name still matches.
+  // The MIDI editor's vertical scroll moves in whole note rows (see ActionSpec), so
+  // it is delivered in whole units regardless of which path classified it. Keyed on
+  // the axis and section, not on a specific id, so a re-worded name still matches.
   out.pitchQuantized = (sid == 32060) && !out.horizontal &&
-                       (strstr(nm, "Scroll") != nullptr || strstr(nm, "Zoom") != nullptr);
+                       strstr(nm, "Scroll") != nullptr;
   return true;
 }
 
@@ -1796,7 +1793,7 @@ extern "C" __declspec(dllexport) int ReaperPluginEntry(HINSTANCE hInst, reaper_p
 
   // Reported to REAPER (and shown in its Extensions list). Keep in step with the
   // version in versions/ and the GitHub release tag.
-  rec->Register("ext_name", (void *)"Smooth Wheel Scroll 1.3.8");
+  rec->Register("ext_name", (void *)"Smooth Wheel Scroll 1.3.7");
   rec->Register("ext_vendor", (void *)"SmoothWheelScroll");
 
   // Glide off: register nothing and hook nothing, so the extension is inert and
