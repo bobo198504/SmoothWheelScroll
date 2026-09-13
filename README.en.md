@@ -47,11 +47,18 @@ notched wheel ──► this plugin ──► the SAME REAPER action, in small p
 | Surface | How |
 |---|---|
 | Main arrange view: scroll + zoom | REAPER's own actions, replayed with the animated value |
+| The arrange view's two scrollbars | Vertical bar: scroll; `Alt`+wheel: vertical zoom. Horizontal bar: `Alt`+wheel horizontal zoom (the no-`Alt` "paging-style" pan is left native) |
 | MIDI editor: scroll + zoom | the MIDI editor section's own actions |
 | Every action whose name ends in `mousewheel` | same path (matched **by action name**, so custom/re-bound keys follow automatically) |
-| Track control panel (TCP) body | the same vertical-scroll action the arrange uses |
+| Track control panel (TCP) body | follows your Mouse Modifier: default `Scroll TCP` → vertical scroll; `Adjust vertical zoom` → vertical zoom |
 | MIDI editor piano keys | the MIDI editor's vertical-scroll action |
+| Mixer panel (MCP) | horizontal, by track (`SetMixerScroll`; whole-track granularity with the remainder carried across frames, so a slow roll never drops distance) |
 | The two width-drag dividers beside the track panel | the half against the panel scrolls tracks; the outer half is left to REAPER (it is the main view there) |
+
+> Wherever the wheel lands — a scrollbar, or a Track/Mixer panel combination — the plugin
+> **asks REAPER first**: bars are found by geometry, and the panels by their **Mouse Modifier**
+> (`Scroll TCP` / `Scroll MCP`). Reassign one of those combinations (say to `Passthrough`) and
+> the plugin **honours your choice** instead of overriding it.
 
 ### What is deliberately left alone
 
@@ -94,8 +101,15 @@ It holds a master smoothing switch and five feel parameters, applied **live** an
 saved automatically, so closing the window keeps them. Nothing needs configuring —
 the defaults are the tuned ones.
 
+Under the controls is a **response curve** — time `t` across, speed `v` up — drawing the
+"accelerate → peak → settle" shape and **updating live** with the five parameters. Each
+parameter **owns one stretch, in its own colour** (matching its slider, with the shade
+following how far that slider is pushed), so it is obvious at a glance which part each
+control drives. It is a **visual guide, not a point-for-point plot** — for judging the
+direction and size of an adjustment, not for reading numbers off.
+
 To verify it loaded, check the Extensions list or REAPER's startup log; the plugin
-also appears as `Smooth Wheel Scroll 1.3.9`.
+also appears as `Smooth Wheel Scroll 1.5.3`.
 
 ### Uninstall
 
@@ -164,11 +178,17 @@ sustained roll builds speed.
 * a per-notch `smoothstep` onset (`S(u) = 3u² − 2u³`)
 * power-law friction, `dv/dt = −c·v^p` with `p = 0.8`
 * brake-by-rhythm: a faster roll loosens the brake, so a quick flick coasts further
+* a **speed ceiling**: near the top each notch adds less and less, and **nothing at all once
+  it is reached** — so "how fast can this roll get" is a definite number, not an asymptote
 * integrated on a fixed 0.25 ms grid, so the motion does not depend on the timer
 
-The model is **frozen**: it was accepted by ear, and later work may only tune
-parameters or the delivery around it, never restructure it. `anim_core.h` is
-byte-identical to the accepted version in every release since.
+**On "frozen":** the model's *feel* is the accepted reference, and later work may only tune
+parameters or the delivery around it. `anim_core.h` was byte-identical across releases for a
+long time; **1.5.3 is the one structural change** — the high-speed soft taper became an
+**explicit speed ceiling** (approved by the user), because the old form was not a real ceiling
+and made a fast sustained roll **double-humped**. A single notch and slow rolls are
+**bit-for-bit unchanged**; only very fast rolls are affected. After any change, run
+`test/check_v1_baseline.sh` (a single notch must still be **1.89 / 17.94**).
 
 ### Delivery
 
