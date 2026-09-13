@@ -21,9 +21,9 @@ for arg in "$@"; do
   case "$arg" in
     # Compile-time switch for the diagnostic logging (writes to %TEMP%).
     --debug-log) DEFS+=(-DSWS_DEBUG_LOG) ;;
-    # Restore the author's tuning window + its Extensions-menu entry. The released
-    # DLL is built WITHOUT this, so a user has no settings entry of any kind.
-    --tuning-ui) DEFS+=(-DSWS_TUNING_UI) ;;
+    # Compile the settings window OUT. The window is part of the normal build (the
+    # plugin ships a settings entry); pass this only to build a headless DLL.
+    --no-settings-ui) DEFS+=(-DSWS_NO_SETTINGS_UI) ;;
     *) echo "unknown build option: $arg" >&2; exit 2 ;;
   esac
 done

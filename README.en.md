@@ -87,7 +87,7 @@ That is the whole install. There is **no settings dialog and nothing to
 configure** — the plugin runs the tuned defaults and is active immediately.
 
 To verify it loaded, check the Extensions list or REAPER's startup log; the plugin
-also appears as `Smooth Wheel Scroll 1.3.8`.
+also appears as `Smooth Wheel Scroll 1.3.9`.
 
 ### Uninstall
 
