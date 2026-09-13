@@ -165,6 +165,33 @@ using its fine-grained encoding (an integer 7-bit part plus a `1/256` fractional
 part, i.e. steps of `1/3840` of a notch). Values are delivered in small pieces over
 time rather than as a few whole units, which is what makes slow motion smooth.
 
+### Parameter delivery: do not second-guess the receiver
+
+**This is the project's founding principle, fixed here. Any change must obey it:**
+
+> The plugin's only job is to **deliver the parameter as well as it possibly can** —
+> the highest precision available, the most elegant model achievable.
+> **It does not consider the receiver's (REAPER's) own capability limits.**
+> Whether the receiver can handle it, and how well, **is the receiver's business**;
+> if it cannot, it will optimize itself.
+
+Concretely:
+
+* **Always give full precision.** The relative value uses REAPER's own encoding with
+  its `1/256` fractional part, down to `1/3840` of a notch — never degraded to whole
+  units.
+* **Send whatever the animation computes**, fraction included.
+* **Never reduce precision because "the receiver might not cope"**, and never add an
+  artificial floor to the model or the delivery (things like "minimum N pixels" or
+  "at least 1 unit before sending").
+* **Never make the receiver's trade-offs for it**: do not exclude an action because
+  you predict it "cannot take this much". If it should be bound, bind it, and send
+  what should be sent.
+* If the receiver handles it poorly, that is **not a defect of this plugin**, and it
+  is not "fixed" by lowering the plugin's quality.
+
+The plugin is responsible for parameter delivery, and for doing it as well as it can.
+
 ### The animation clock
 
 Position sampling density matters as much as value precision. On the test machine
