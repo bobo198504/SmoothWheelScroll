@@ -19,27 +19,31 @@
 
 static int g_fast = 0;
 static WORD g_modVk = 0;
+static WORD g_modVk2 = 0;
 
-static void modDown(void)
+static void key(WORD vk, bool up)
 {
-  if (!g_modVk)
+  if (!vk)
     return;
   INPUT in = {0};
   in.type = INPUT_KEYBOARD;
-  in.ki.wVk = g_modVk;
+  in.ki.wVk = vk;
+  if (up)
+    in.ki.dwFlags = KEYEVENTF_KEYUP;
   SendInput(1, &in, sizeof(in));
+}
+
+static void modDown(void)
+{
+  key(g_modVk, false);
+  key(g_modVk2, false);
   Sleep(40);
 }
 
 static void modUp(void)
 {
-  if (!g_modVk)
-    return;
-  INPUT in = {0};
-  in.type = INPUT_KEYBOARD;
-  in.ki.wVk = g_modVk;
-  in.ki.dwFlags = KEYEVENTF_KEYUP;
-  SendInput(1, &in, sizeof(in));
+  key(g_modVk2, true);
+  key(g_modVk, true);
   Sleep(40);
 }
 
@@ -72,6 +76,8 @@ int main(int argc, char **argv)
       if (strcmp(argv[a + 1], "alt") == 0) g_modVk = VK_MENU;
       else if (strcmp(argv[a + 1], "ctrl") == 0) g_modVk = VK_CONTROL;
       else if (strcmp(argv[a + 1], "shift") == 0) g_modVk = VK_SHIFT;
+      else if (strcmp(argv[a + 1], "ctrl+alt") == 0) { g_modVk = VK_CONTROL; g_modVk2 = VK_MENU; }
+      else if (strcmp(argv[a + 1], "ctrl+shift") == 0) { g_modVk = VK_CONTROL; g_modVk2 = VK_SHIFT; }
       a += 2;
       continue;
     }
