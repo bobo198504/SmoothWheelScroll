@@ -85,6 +85,10 @@ Windows x64，REAPER 7（在 `7.79` 上构建与测试）。
 颜色深浅跟着该参数的档位走），所以"哪段是哪个参数在管"一眼就能对上。它是**直观示意**，
 不是逐点复刻公式——用来判断拖杆的方向和幅度，不是用来读数。
 
+<p align="center">
+  <img src="test/settings.png" alt="Smooth Wheel Scroll 设置面板" width="330">
+</p>
+
 想确认它加载了：看扩展列表或 REAPER 启动日志，插件名会显示为
 `Smooth Wheel Scroll 1.5.3`。
 

@@ -108,6 +108,10 @@ following how far that slider is pushed), so it is obvious at a glance which par
 control drives. It is a **visual guide, not a point-for-point plot** — for judging the
 direction and size of an adjustment, not for reading numbers off.
 
+<p align="center">
+  <img src="test/settings.png" alt="Smooth Wheel Scroll settings panel" width="330">
+</p>
+
 To verify it loaded, check the Extensions list or REAPER's startup log; the plugin
 also appears as `Smooth Wheel Scroll 1.5.3`.
 
