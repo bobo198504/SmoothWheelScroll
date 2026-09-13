@@ -1,0 +1,27 @@
+# Build output
+build/
+
+# AI-session source-editing helpers and recovered history (internal tooling, not
+# part of the project). The meaningful frozen snapshots live in versions/.
+_hist/
+_diag/*.js
+
+# Capture logs from the diagnostic probes and the --debug-log build
+_diag/*.log
+_diag/*.txt
+_diag/*.bat
+
+# REAPER creates these next to any project it opens
+media/
+recordtmp/
+*.rpp-bak
+
+# Local REAPER deployment target, if you keep one
+deploy.local.sh
+
+# OS / editor noise
+Thumbs.db
+desktop.ini
+*.swp
+.vscode/
+.idea/
