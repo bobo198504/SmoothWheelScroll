@@ -200,15 +200,23 @@ static bool g_glideOn = true;
 // together are what caused the window to be dragged back into the dock on every open
 // (so it could never be restored to a normal floating window).
 static bool g_dockOn = false;
-// The FLOATING window's own geometry, remembered across opens and restarts so the panel
-// reappears where the user left it. Without this the window was recreated at the OS
+// Where the FLOATING window was last seen, remembered across opens and restarts so the
+// panel reappears where the user left it. Without this the window was recreated at the OS
 // default position on every open and always came up near the top-left corner.
 //
-// Docked geometry is deliberately NOT kept here: when the window is in a docker REAPER
-// owns its position and restores it through DockWindowAddEx (reaper.ini), so duplicating
-// that would only be a second, competing memory.
-static RECT g_floatRect = {0, 0, 0, 0};
-static bool g_floatRectValid = false;
+// Only the POSITION is remembered, never the size. The panel has a designed size (the
+// narrowest width that keeps the master switch on one line, and the height at which
+// nothing needs scrolling), and it opens at that size every time. Remembering the size as
+// well is what let the height creep up on every reopen: the saved rect is a WHOLE-window
+// rect (caption and border included), but it was being fed back in as if it were a client
+// size, so the frame was added a second time on each open -- and since the grown value was
+// saved again, it compounded.
+//
+// Docked geometry is deliberately NOT kept here either: in a docker REAPER owns the
+// position and restores it through DockWindowAddEx (reaper.ini), so duplicating that would
+// only be a second, competing memory.
+static POINT g_floatPos = {0, 0};
+static bool g_floatPosValid = false;
 
 // --- 6. RESERVED: transition curve (MARKED, NOT BUILT) ------------------------
 // Going from the lone notch (full onset ramp) into a roll (short window) is currently
@@ -507,15 +515,17 @@ static void SaveSettings()
   SetExtState(kStateSection, "coast", buf, true);
   SetExtState(kStateSection, "glide", g_glideOn ? "1" : "0", true);
   SetExtState(kStateSection, "dock", g_dockOn ? "1" : "0", true);
-  // Window geometry as "x y w h". Written only once a floating geometry is known, so an
-  // install that has never been moved does not pin a position it never had.
-  if (g_floatRectValid)
+  // Floating window POSITION as "x y". Written only once the window has actually been
+  // placed, so an install that has never moved it does not pin a position it never had.
+  if (g_floatPosValid)
   {
-    _snprintf(buf, sizeof(buf), "%ld %ld %ld %ld", (long)g_floatRect.left,
-              (long)g_floatRect.top, (long)(g_floatRect.right - g_floatRect.left),
-              (long)(g_floatRect.bottom - g_floatRect.top));
-    SetExtState(kStateSection, "win", buf, true);
+    _snprintf(buf, sizeof(buf), "%ld %ld", (long)g_floatPos.x, (long)g_floatPos.y);
+    SetExtState(kStateSection, "pos", buf, true);
   }
+  // Clear the key an earlier build used for the whole window rect. It is no longer read
+  // (the size is not remembered any more), and leaving a stale value behind would be a
+  // confusing thing to find in the ini later.
+  SetExtState(kStateSection, "win", "", true);
   Log("settings saved: start=%.2f accel=%.2f release=%.1f hold=%.2f coast=%.2f glide=%d dock=%d",
       g_startPct, g_accelPct, g_releaseMs, g_hold, g_coast, g_glideOn ? 1 : 0,
       g_dockOn ? 1 : 0);
@@ -587,19 +597,17 @@ static void LoadSettings()
     const char *d = GetExtState(kStateSection, "dock");
     if (d && *d)
       g_dockOn = (d[0] != '0');
-    // Window geometry, if one was ever recorded. A malformed or partial value is simply
-    // ignored, which leaves the window to open at its default placement.
-    const char *w = GetExtState(kStateSection, "win");
-    long wx = 0, wy = 0, ww = 0, wh = 0;
-    const char *wp = w;
-    if (wp && ParseLong(&wp, &wx) && ParseLong(&wp, &wy) && ParseLong(&wp, &ww) &&
-        ParseLong(&wp, &wh) && ww > 0 && wh > 0)
+    // Floating window position, if one was ever recorded. A malformed value is simply
+    // ignored, which leaves the window to open at its default (centred) placement. The
+    // size is not read -- it is not remembered (see g_floatPos).
+    const char *p = GetExtState(kStateSection, "pos");
+    long px = 0, py = 0;
+    const char *pp = p;
+    if (pp && ParseLong(&pp, &px) && ParseLong(&pp, &py))
     {
-      g_floatRect.left = (LONG)wx;
-      g_floatRect.top = (LONG)wy;
-      g_floatRect.right = (LONG)(wx + ww);
-      g_floatRect.bottom = (LONG)(wy + wh);
-      g_floatRectValid = true;
+      g_floatPos.x = (LONG)px;
+      g_floatPos.y = (LONG)py;
+      g_floatPosValid = true;
     }
   }
   RefreshDerived(); // clamps everything into range
@@ -2387,6 +2395,19 @@ static bool WindowInDock(HWND h);
 static void MinWindowSize(const PanelMetrics &m, LONG *outW, LONG *outH);
 static void CaptureFloatGeom(HWND h);
 
+// The panel's window style -- one source, because three places must agree on it:
+// the CreateWindowEx call, the AdjustWindowRectEx padding, and the minimum track size.
+// If they disagree the client area is computed for a frame the window does not have.
+//
+// WS_THICKFRAME is the frame that makes a window resizable by dragging an edge. It was
+// missing, which is why the floating panel could not be resized at all. It is added only
+// when the panel will FLOAT: inside the docker REAPER owns the frame, and a thick frame
+// there would draw a resize edge inside the dock rather than at its border.
+static DWORD PanelWindowStyle()
+{
+  return WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | (g_dockOn ? 0 : WS_THICKFRAME);
+}
+
 // Size the window so the laid-out content fits exactly, with no scrollbar. Rather than
 // trusting a computed minimum, this asks the LAYOUT what it needs after running once and
 // then grows the window to match -- so it cannot be wrong at another font, DPI or theme:
@@ -2443,8 +2464,7 @@ static void FitWindowToContent(HWND h)
     const int newH = (tooShort ? g_contentH : rc.bottom);
 
     RECT wr = {0, 0, newW, newH};
-    AdjustWindowRectEx(&wr, WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU, FALSE,
-                       WS_EX_TOOLWINDOW);
+    AdjustWindowRectEx(&wr, PanelWindowStyle(), FALSE, WS_EX_TOOLWINDOW);
     SetWindowPos(h, nullptr, 0, 0, wr.right - wr.left, wr.bottom - wr.top,
                  SWP_NOMOVE | SWP_NOZORDER);
   }
@@ -2931,7 +2951,7 @@ static bool WindowInDock(HWND h)
 static void MinWindowSize(const PanelMetrics &m, LONG *outW, LONG *outH)
 {
   RECT r = {0, 0, MinPanelWidth(m), m.pad * 2 + m.headH + m.rowH};
-  AdjustWindowRectEx(&r, WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU, FALSE, WS_EX_TOOLWINDOW);
+  AdjustWindowRectEx(&r, PanelWindowStyle(), FALSE, WS_EX_TOOLWINDOW);
   if (outW) *outW = r.right - r.left;
   if (outH) *outH = r.bottom - r.top;
 }
@@ -2978,8 +2998,9 @@ static void PlaceCenteredOnMain(HWND h)
   SetWindowPos(h, nullptr, r.left, r.top, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
 }
 
-// Remember where a floating window currently is. Docked geometry is skipped: REAPER owns
-// that and keeps it itself.
+// Remember the top-left corner of a floating window. Docked geometry is skipped: REAPER
+// owns that and keeps it itself. The SIZE is deliberately not captured -- the panel always
+// opens at its designed size, so only the position is the user's to decide.
 static void CaptureFloatGeom(HWND h)
 {
   if (!h || WindowInDock(h))
@@ -2987,8 +3008,9 @@ static void CaptureFloatGeom(HWND h)
   RECT r;
   if (GetWindowRect(h, &r))
   {
-    g_floatRect = r;
-    g_floatRectValid = true;
+    g_floatPos.x = r.left;
+    g_floatPos.y = r.top;
+    g_floatPosValid = true;
   }
 }
 
@@ -3067,21 +3089,12 @@ static void ShowConfigWindow()
   RebuildThemeBrushes();
 
   const PanelMetrics m = PanelMetricsNow();
-  const DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU;
-  // Size: a remembered floating size wins (the user may have resized the panel), clamped
-  // to at least the minimum; otherwise the compact size where nothing scrolls. The height
-  // is only a starting point -- FitWindowToContent below corrects it against the real
-  // laid-out content.
-  LONG minW = 0, minH = 0;
-  MinWindowSize(m, &minW, &minH);
+  const DWORD style = PanelWindowStyle();
+  // Size: the panel's DESIGNED size, every time. The narrowest width that keeps the master
+  // switch on one line, and the height at which nothing needs scrolling. Opening at a
+  // remembered size is what used to make the window grow on each reopen (see g_floatPos);
+  // the size is fixed by design, so it is simply recomputed here.
   RECT wr = {0, 0, MinPanelWidth(m), PanelIdealHeight(m)};
-  if (g_floatRectValid && !g_dockOn)
-  {
-    wr.right = (g_floatRect.right - g_floatRect.left > minW)
-                   ? (g_floatRect.right - g_floatRect.left) : minW;
-    wr.bottom = (g_floatRect.bottom - g_floatRect.top > minH)
-                    ? (g_floatRect.bottom - g_floatRect.top) : minH;
-  }
   // CreateWindowEx takes the size of the WHOLE window, so the caption and border are
   // added to the client size here; otherwise the bottom padding is eaten by the frame.
   AdjustWindowRectEx(&wr, style, FALSE, WS_EX_TOOLWINDOW);
@@ -3097,9 +3110,12 @@ static void ShowConfigWindow()
 
   CreatePanelChildren(g_cfgWnd);
   LayoutControls(g_cfgWnd);
-  // Now that the controls exist, let them tell us the real size they need: the panel
-  // opens at exactly the size where nothing scrolls. Only when it will float -- when it
-  // is going into the docker, REAPER owns the size and the panel scrolls instead.
+  // ASK the layout what it really needs and use that as the size: measure, do not
+  // estimate, so the panel opens at exactly the size where nothing scrolls and cannot be
+  // wrong at another font, DPI or theme. This also overrides the computed starting size
+  // above, so there is one authority for "the designed size".
+  //
+  // Floating only: when docked, REAPER owns the size and the panel scrolls instead.
   if (!g_dockOn)
     FitWindowToContent(g_cfgWnd);
   ApplyDarkTitleBar(g_cfgWnd, g_theme.dark);
@@ -3111,9 +3127,10 @@ static void ShowConfigWindow()
   // DOCKED: REAPER places the window -- DockWindowAddEx restores the dock from the
   // placement it keeps in its own configuration, so the plugin passes no geometry at all.
   //
-  // FLOATING: the plugin places it. The remembered position is restored if there is one;
+  // FLOATING: the plugin places it. The remembered POSITION is restored if there is one;
   // otherwise it opens centred on REAPER's main window rather than at the OS default
-  // position, which is what made it appear in the top-left corner every time.
+  // position, which is what made it appear in the top-left corner every time. The size is
+  // not restored -- it is the designed size, decided above.
   if (g_dockOn && DockWindowAddEx)
   {
     DockWindowAddEx(g_cfgWnd, "Smooth Wheel Scroll", "SmoothWheelScroll_Settings", true);
@@ -3122,12 +3139,22 @@ static void ShowConfigWindow()
   }
   else
   {
-    if (g_floatRectValid)
+    if (g_floatPosValid)
     {
-      RECT r = g_floatRect;
-      EnsureOnScreen(r); // a remembered spot can be off-screen after a display change
-      SetWindowPos(g_cfgWnd, nullptr, r.left, r.top, 0, 0,
-                   SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+      // Keep the size; move only. Clamp the corner back onto a monitor that exists, since
+      // a remembered spot can be off-screen after a display change.
+      RECT r;
+      if (GetWindowRect(g_cfgWnd, &r))
+      {
+        const int w = r.right - r.left, h = r.bottom - r.top;
+        r.left = g_floatPos.x;
+        r.top = g_floatPos.y;
+        r.right = r.left + w;
+        r.bottom = r.top + h;
+        EnsureOnScreen(r);
+        SetWindowPos(g_cfgWnd, nullptr, r.left, r.top, 0, 0,
+                     SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+      }
     }
     else
     {
@@ -3135,7 +3162,7 @@ static void ShowConfigWindow()
     }
     ShowWindow(g_cfgWnd, SW_SHOW);
     SetForegroundWindow(g_cfgWnd);
-    // Only now start following the geometry, so the creation and placement above do not
+    // Only now start following the position, so the creation and placement above do not
     // register as user movements.
     g_rectTracking = true;
   }

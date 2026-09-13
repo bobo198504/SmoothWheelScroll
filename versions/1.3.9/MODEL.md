@@ -1,7 +1,7 @@
 # SmoothWheelScroll for REAPER 1.3.9
 
 **面向用户的设置面板正式发布**（1.3.6 曾移除设置入口，本版按用户要求做回来）。
-DLL md5 `3cc927cdfb183fcf30617277e12c2350`（含下方 19.1–19.8 修复）。
+DLL md5 `0f9e39452ca26f1bd71894d3e2062ce1`（含下方各项修复）。
 
 ## 面板
 
@@ -70,7 +70,7 @@ start / accel / release / hold / coast / glide
   即关闭 = 全面原生，无一例外。
 - 面板改动**不触碰** `Delivery`、不改判定逻辑、不改动作表。
 
-## 1.3.9.1 三处回归修复（滚动条暗色 / Dock 可逆 / 关闭后可再开）
+## 修复：三处回归（滚动条暗色 / Dock 可逆 / 关闭后可再开）
 
 用户报三条，全在**面板生命周期与窗口主题**，**与模型无关**：`anim_core.h` 仍与 1.3.8
 逐字节相同，单格仍 **1.89 / 17.94**。
@@ -90,7 +90,7 @@ start / accel / release / hold / coast / glide
    否则前台化。发现窗口已脱离 docker 而 `g_dockOn` 仍为真则就地改回并保存。
    另把 `DockWindowRemove` 从 `WM_DESTROY` 移到 **`WM_CLOSE`**（`ToggleDocking` 自己先 remove）。
 
-## 1.3.9.2 Accel 上限收到 10%
+## 修复：Accel 上限收到 10%
 
 **用户要求**：`Accel`（加速堆量）上限从 12% 收到 **10%**——"这个值太大堆起来有点可怕"。
 
@@ -99,7 +99,7 @@ start / accel / release / hold / coast / glide
 - 因为范围是**单一来源**且读入过 `RefreshDerived` → `Clamp`，store 里若存着 >10 的旧值，
   下次载入会被**自动钳到 10**，不会越界。
 
-## 1.3.9.3 设置动作改为开关
+## 修复：设置动作改为开关
 
 **用户要求**：设置动作要能**反复开关**（可绑到快捷键），而不是只能开。
 
@@ -109,7 +109,7 @@ start / accel / release / hold / coast / glide
   不能当成"关着"，否则第一次按像没反应、第二次会开出第二个窗口）。
 - 菜单项文案随状态切换（`settings (close)` / `settings...`）。
 
-## 1.3.9.4 窗口位置遵守 REAPER 的定位规则
+## 修复：窗口位置遵守 REAPER 的定位规则
 
 **用户要求**："不管是窗口模式还是 Dock 模式，窗口的位置要遵循 REAPER 的定位规则，
 不要自己跑来跑去，或每次都出现在左上角"。
@@ -132,7 +132,7 @@ start / accel / release / hold / coast / glide
   `.text` 从 0xc3f0 暴涨到 **0x11ec0（+23KB）**。已改为**手写 `ParseLong`**，`.text` 回到 0xcab0。
   改动后请留意这个体积特征，别无意中把大块 libc 拖进来。
 
-## 1.3.9.5 Release 上限收到 300ms（用户要求）
+## 修复：Release 上限收到 300ms（用户要求）
 
 **用户要求**："Rel 上限改到 300ms，其它不变"。
 
@@ -140,7 +140,7 @@ start / accel / release / hold / coast / glide
   （`anim_core.h` 仍与 1.3.8 逐字节相同，单格 1.89 / 17.94）。
 - 同样过 `RefreshDerived` → `Clamp`：store 里若残留 >300 的旧值，载入自动钳到 300。
 
-## 1.3.9.6 Extensions 菜单项缩为 `SmoothScroll...`
+## 修复：Extensions 菜单项缩为 `SmoothScroll...`
 
 **用户要求**：菜单里 `Smooth Wheel Scroll settings...` 太长，缩到与 `ReaPack` 差不多的长度；
 **命令（动作名）不变**。
@@ -151,7 +151,7 @@ start / accel / release / hold / coast / glide
 - 标签不再写 open/close，**开关状态改为勾选**（`MFS_CHECKED`）。菜单是展开时重建的，
   每次都会按实时状态重算。
 
-## 1.3.9.7 面板有焦点时快捷键也能用（accelerator 回传）
+## 修复：面板有焦点时快捷键也能用（accelerator 回传）
 
 **用户反馈**："焦点在弹出的设置面板，快捷键没效果，不能马上按回去，要点到 REAPER 再按，
 才会生效"。即：面板有焦点 → 按键进不了 REAPER → 开面板的那个快捷键失灵。
@@ -176,7 +176,7 @@ start / accel / release / hold / coast / glide
 - 做法与 **SWS 的可停靠窗口一致**（其 `keyHandler` 注释："force it to main reaper wnd
   (passthrough) so that main wnd actions work!"），也是这个 API 的参考实现。
 
-## 1.3.9.8 `one page` 动作不再被驱动（论坛反馈，A 方案）
+## 修复：`one page` 动作不再被驱动（论坛反馈，A 方案）
 
 **论坛反馈**：`View: Scroll view vertically one page (MIDI CC relative/mousewheel)` 及其
 `reversed`，**一格滚轮把 100 条轨道直接冲到头/底**。
@@ -203,6 +203,27 @@ start / accel / release / hold / coast / glide
   故插件能看到它，**不需要改代码**。
 - **MIDI 编辑器竖直缩放"没变化"**：该轴是 `kImmediate`（整格一次、直接停），
   因它是固定 2px 刻度、单格约 0.24px，**缓动无处落脚**。**这是预期行为，不是回归。**
+
+## 修复：悬浮面板不能拖拽调整大小
+
+- 窗口样式原来是 `WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU`，**缺 `WS_THICKFRAME`**，
+  所以没有可拖拽的边框，**浮动面板完全不能改尺寸**。
+- 修法：样式收成单一来源 `PanelWindowStyle()`，**仅浮动时**带 `WS_THICKFRAME`
+  （停靠时 REAPER 拥有外框，加厚框会在 docker 内部画出多余边框）。
+  三处 `AdjustWindowRectEx` 与 `CreateWindowEx` 全部改用它，避免"外框尺寸按没有的样式算"。
+
+## 修复：反复开关悬浮面板，高度会越来越高
+
+- **根因**：记住的是**整窗矩形**。恢复时把这个**整窗尺寸当成客户区尺寸**再喂给
+  `AdjustWindowRectEx`，于是标题栏和边框**被算了第二遍**；而增大的值又被**存回去**，
+  于是一次比一次高（累积）。
+- **改法**：**只记忆位置，不记忆尺寸**。面板尺寸是设计值——每次打开都按“标题栏不换行 +
+  无滚动条”重新算出（`MinPanelWidth` / `FitWindowToContent`）；位置有记录就还原，没有就
+  居中于主窗口。这样高宽永远符合设计，不会漂。
+- 存储键：`pos` = `"x y"`。原先的 `win` = `"x y w h"` **已废弃**：加载时不再读，
+  保存时会被清空，免得 ini 里留一条会误导人的旧值。
+- **实测复现**（真实 Win32 边距，headless）：旧逻辑每次重开 **+39px**
+  （500→539→578→617…）；新逻辑**恒定 539px**。
 
 ## 验收
 
