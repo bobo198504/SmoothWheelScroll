@@ -2989,7 +2989,10 @@ static void ToggleConfigWindow()
   if (g_cfgWnd && IsWindow(g_cfgWnd))
     showing = WindowInDock(g_cfgWnd) || IsWindowVisible(g_cfgWnd);
   if (showing)
-    SendMessageA(g_cfgWnd, WM_CLOSE, 0, 0);
+    // Posted rather than sent: this runs from REAPER's action/accelerator processing
+    // (see PanelKeyHandler), and destroying the window re-entrantly inside that call
+    // would tear down a window REAPER is still dispatching to.
+    PostMessageA(g_cfgWnd, WM_CLOSE, 0, 0);
   else
     ShowConfigWindow();
 }
@@ -3181,6 +3184,67 @@ static void OnMenuHook(const char *menuidstr, void *menu, int /*flag*/)
   mi.dwTypeData = (LPSTR)kMenuLabel;
   InsertMenuItemA(hm, GetMenuItemCount(hm), TRUE, &mi);
 }
+
+// --- Keyboard focus: hand shortcuts back to REAPER ---------------------------
+//
+// The panel is a real top-level window, so once it has focus the keyboard belongs to it:
+// keys go to our window procedure, never to REAPER, and the shortcut that opens the panel
+// stops working -- the user has to click back into REAPER first. That is the standard
+// behaviour of any extension window, and REAPER provides the way out: an "accelerator"
+// registration lets a plugin see the keyboard queue and CHOOSE to push a key back onto
+// the main window's action table.
+//
+// Returning -666 does exactly that ("force it to the main window's accel table", per the
+// SDK). So every key that the panel itself does not need is passed on, and the shortcut
+// keeps working while the panel has focus -- press it again and the panel closes.
+//
+// This is the same arrangement SWS uses for its dockable windows, which is the reference
+// implementation for this API.
+static int PanelKeyHandler(MSG *msg, accelerator_register_t *ctx)
+{
+  (void)ctx;
+  if (!msg || !g_cfgWnd || !IsWindow(g_cfgWnd))
+    return 0; // 0 = "not my window", let REAPER do its normal thing
+  // Only while the panel (or one of its children) actually has the focus; when the focus
+  // is elsewhere the key is none of our business.
+  const HWND focus = GetFocus();
+  if (!focus || !(focus == g_cfgWnd || IsChild(g_cfgWnd, focus)))
+    return 0;
+
+  if (msg->message == WM_KEYDOWN || msg->message == WM_SYSKEYDOWN)
+  {
+    char cls[64] = {0};
+    const bool haveCls =
+        GetFocus() && GetClassNameA(GetFocus(), cls, sizeof(cls)) != 0;
+
+    // Keys a focused control is actually using must reach that control, so they are
+    // passed to the window (-1) rather than to REAPER. Only the two cases that matter:
+    //   - the fader: left/right step the value, home/end go to the ends;
+    //   - the check box: space toggles it.
+    // Returning 1 here would EAT the key before the control saw it, which is why these
+    // return -1 -- the control still needs its own WM_KEYDOWN.
+    if (haveCls && !strcmp(cls, SWSC_FADER_CLASS))
+      switch (msg->wParam)
+      {
+      case VK_LEFT:
+      case VK_RIGHT:
+      case VK_HOME:
+      case VK_END:
+        return -1; // to the window: the fader handles these itself
+      default:
+        break;
+      }
+    if (haveCls && !strcmp(cls, "Button") && msg->wParam == VK_SPACE)
+      return -1; // to the window: space toggles the focused check box
+
+    // Everything else -- in particular any key bound to a REAPER action, such as our own
+    // settings toggle -- is pushed onto the main window's action table.
+    return -666;
+  }
+  return 0;
+}
+
+static accelerator_register_t g_accel = {PanelKeyHandler, true, nullptr};
 #endif // SWS_NO_SETTINGS_UI
 
 static void RemoveAll()
@@ -3193,6 +3257,8 @@ static void RemoveAll()
     DestroyWindow(g_cfgWnd);
     g_cfgWnd = nullptr;
   }
+  // Stop seeing the keyboard queue before the rest of the plugin goes away.
+  plugin_register("-accelerator", (void *)&g_accel);
 #endif
   if (g_msgHook)
   {
@@ -3298,6 +3364,9 @@ extern "C" __declspec(dllexport) int ReaperPluginEntry(HINSTANCE hInst, reaper_p
   g_cmdTune = rec->Register("custom_action", &s_tuneAction);
   rec->Register("hookcustommenu", (void *)OnMenuHook);
   AddExtensionsMainMenu();
+  // Hand keys the panel does not use back to REAPER, so a bound shortcut keeps working
+  // while the panel has focus (see PanelKeyHandler).
+  rec->Register("accelerator", (void *)&g_accel);
 #endif
 
   rec->Register("atexit", (void *)OnExit);

@@ -1,7 +1,7 @@
 # SmoothWheelScroll for REAPER 1.3.9
 
 **面向用户的设置面板正式发布**（1.3.6 曾移除设置入口，本版按用户要求做回来）。
-DLL md5 `700e0efa283e23b4f541f6ab992252e7`（含下方 19.1–19.6 修复）。
+DLL md5 `1eba25edf12ae41c745a19574ea4dd11`（含下方 19.1–19.7 修复）。
 
 ## 面板
 
@@ -150,6 +150,31 @@ start / accel / release / hold / coast / glide
   不动；README/AGENTS 也仍按此名描述。
 - 标签不再写 open/close，**开关状态改为勾选**（`MFS_CHECKED`）。菜单是展开时重建的，
   每次都会按实时状态重算。
+
+## 1.3.9.7 面板有焦点时快捷键也能用（accelerator 回传）
+
+**用户反馈**："焦点在弹出的设置面板，快捷键没效果，不能马上按回去，要点到 REAPER 再按，
+才会生效"。即：面板有焦点 → 按键进不了 REAPER → 开面板的那个快捷键失灵。
+
+**根因**：面板是真正的顶层窗口。它一旦拿到焦点，键盘就归它，按键只进我们的 WndProc，
+**到不了 REAPER 的快捷键表**。这是任何扩展窗口的默认行为。
+
+**官方解法**（REAPER 为此提供 `accelerator` 注册）：注册 `accelerator_register_t`，
+在键盘队列里拿到键后有选择地**把键推回主窗口的动作表**。
+
+- `PanelKeyHandler`：**仅当焦点在面板或其子控件上**才介入（否则 `return 0` = 不是我的窗口）。
+- WM_KEYDOWN / WM_SYSKEYDOWN 时：
+  - 焦点在**推子**且是 `←/→/Home/End` → `return -1`（**放行给窗口**，让推子自己处理）。
+    ⚠️ **不能返回 1**：1 是"吃掉按键"，那样推子就收不到自己的 `WM_KEYDOWN`，方向键会失灵。
+  - 焦点在**复选框**且是空格 → `return -1`（空格切换勾选）。
+  - **其余一律 `return -666`** —— SDK 注释原文 "force it to the main window's accel table"。
+    于是绑定的快捷键在面板有焦点时照常生效，**再按一次即关闭面板**。
+- 注册时机：随 `custom_action` 一起注册；`RemoveAll()` 里 `-accelerator` 注销。
+- 一个连带修正：`ToggleConfigWindow()` 关闭面板由 `SendMessage` 改为 **`PostMessage`**。
+  因为它现在可能**从 REAPER 的快捷键处理里被调用**，在那里同步销毁窗口会拆掉 REAPER
+  正在派发的窗口。改为投递后，关闭发生在消息循环里，安全。
+- 做法与 **SWS 的可停靠窗口一致**（其 `keyHandler` 注释："force it to main reaper wnd
+  (passthrough) so that main wnd actions work!"），也是这个 API 的参考实现。
 
 ## 验收
 
