@@ -6,7 +6,11 @@
 A native REAPER extension that turns the mouse wheel into the kind of fine-grained,
 inertial scrolling a touchpad produces — **without changing what the wheel does**.
 
-[中文说明](README.zh-CN.md)
+[中文说明](README.md)
+
+<p align="center">
+  <img src="test/demo.gif" alt="Smooth Wheel Scroll demo" width="880">
+</p>
 
 REAPER already ships a wheel-driven action for almost everything you would want to
 scroll or zoom (its action names end in `(MIDI CC relative/mousewheel)`). Those

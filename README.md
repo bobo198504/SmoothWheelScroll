@@ -7,6 +7,10 @@
 
 [English](README.en.md)
 
+<p align="center">
+  <img src="test/demo.gif" alt="Smooth Wheel Scroll 效果演示" width="880">
+</p>
+
 REAPER 几乎所有能滚动/缩放的东西都已经有对应的"滚轮动作"（动作名以
 `(MIDI CC relative/mousewheel)` 结尾），这些动作本身就接受平滑的相对量。问题出在
 **鼠标**：一格就是一整个 `WHEEL_DELTA` 大步，动作每格只收到一次粗跳，于是运动看起来
