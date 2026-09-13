@@ -717,11 +717,13 @@ static bool StrHasI(const char *s, const char *sub)
 // name mentions the wheel and is a Zoom or a Scroll. Three kinds are deliberately
 // excluded from THAT family, because each call jumps a whole step regardless of
 // the value handed in, so feeding it many small values would multiply the jump:
-//   - "one page"  : each call scrolls a whole page;
 //   - "snap to theme-defined sizes": each call snaps one size step;
 //   - track/envelope "height" adjusters: likewise step-based.
-// (The mousewheel family above is not subject to this, since those actions take a
-// relative amount by design.)
+//
+// "one page" is excluded from BOTH families -- see the guard in the body. Its name
+// carries the mousewheel marker like the relative actions do, but that marker only
+// says what may DRIVE it; the page actions still jump a whole page per call and
+// ignore the value handed in.
 static bool ClassifyByName(KbdSectionInfo *sec, int command, ActionSpec &out)
 {
   if (!sec || !kbd_getTextFromCmd)
@@ -738,6 +740,20 @@ static bool ClassifyByName(KbdSectionInfo *sec, int command, ActionSpec &out)
   if (!strstr(nm, "View"))
     return false;
 
+  // "one page" is a fixed-step action no matter what else its name says: one call
+  // scrolls a whole page and the value handed in is ignored. The reported runaway is
+  // exactly this -- "View: Scroll view vertically one page (MIDI CC relative/mousewheel)"
+  // carries the mousewheel marker, so it was taken for a relative action and fed the
+  // delivered stream (one notch arrives as many small increments). Each increment
+  // scrolled a whole page, so a single notch crossed ~100 tracks.
+  //
+  // The marker in that name says only what is ALLOWED to drive the action; it does not
+  // promise the action consumes a relative amount. So this is excluded from BOTH families
+  // and left entirely to REAPER, which gives the intended native behaviour: one notch,
+  // one page. Nothing else about the name-based rule changes.
+  if (strstr(nm, "one page"))
+    return false;
+
   const bool relativeFamily = StrHasI(nm, "mousewheel");
   if (!relativeFamily)
   {
@@ -745,8 +761,8 @@ static bool ClassifyByName(KbdSectionInfo *sec, int command, ActionSpec &out)
       return false;
     if (!strstr(nm, "Zoom") && !strstr(nm, "Scroll"))
       return false;
-    if (strstr(nm, "one page") || strstr(nm, "snap to theme") ||
-        strstr(nm, "height") || strstr(nm, "Modify"))
+    if (strstr(nm, "snap to theme") || strstr(nm, "height") ||
+        strstr(nm, "Modify"))
       return false;
   }
 

@@ -1,7 +1,7 @@
 # SmoothWheelScroll for REAPER 1.3.9
 
 **面向用户的设置面板正式发布**（1.3.6 曾移除设置入口，本版按用户要求做回来）。
-DLL md5 `1eba25edf12ae41c745a19574ea4dd11`（含下方 19.1–19.7 修复）。
+DLL md5 `3cc927cdfb183fcf30617277e12c2350`（含下方 19.1–19.8 修复）。
 
 ## 面板
 
@@ -175,6 +175,34 @@ start / accel / release / hold / coast / glide
   正在派发的窗口。改为投递后，关闭发生在消息循环里，安全。
 - 做法与 **SWS 的可停靠窗口一致**（其 `keyHandler` 注释："force it to main reaper wnd
   (passthrough) so that main wnd actions work!"），也是这个 API 的参考实现。
+
+## 1.3.9.8 `one page` 动作不再被驱动（论坛反馈，A 方案）
+
+**论坛反馈**：`View: Scroll view vertically one page (MIDI CC relative/mousewheel)` 及其
+`reversed`，**一格滚轮把 100 条轨道直接冲到头/底**。
+
+**根因**：这两条名字里同时有 `one page` 和 `mousewheel`。原规则把 `one page` 的排除只写在
+**非 mousewheel 家族**里，于是它们进了 mousewheel 家族、**绕过排除**被驱动。而插件按设备流
+投递（单格约 28 次小步），每次调用翻一整页 → **约 28 次翻页**。
+
+**修复**：`one page` **从两个家族里都排除**（判定放在 `View` 检查之后、家族分支之前），
+一律放行给 REAPER —— 一格一页，恢复原生行为。**只动这一处，其它绑定规则不变。**
+
+**这是对"参数传达原则（五之二）"的一处有界例外**：该动作**无视传入的值**，是**离散动作**；
+五之二约束的是"连续动作收下了但处理不好"，而把离散动作当连续动作喂属于**分类错误**。
+**边界：只排除 `one page` 这一串**；`snap to theme` / `height` 的 mousewheel 版本仍照绑。
+
+**回归门**：`test/check_classify.sh` —— 把改动前后的规则各跑一遍并 diff，
+要求"差异只有 one page"。当前：差异 3 处、全是 one page。
+
+### 另外两条论坛反馈：不改代码
+
+- **Ctrl+滚轮 竖直缩放**：反馈者称"硬编码、插件看不到"，但他同一段里又写"改绑别的快捷键
+  就能生效"——自相矛盾。实查本机 `reaper-kb.ini` 第 23 行：
+  `Ctrl+Mousewheel → 1000 View: Zoom vertically`，**就是插件动作表里的一条**。
+  故插件能看到它，**不需要改代码**。
+- **MIDI 编辑器竖直缩放"没变化"**：该轴是 `kImmediate`（整格一次、直接停），
+  因它是固定 2px 刻度、单格约 0.24px，**缓动无处落脚**。**这是预期行为，不是回归。**
 
 ## 验收
 
