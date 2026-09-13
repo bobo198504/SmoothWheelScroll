@@ -302,3 +302,26 @@ DLL md5 `d293678f254466bd6bc628377477b0ad`。
 按位置读 kick：内半 `989`（=面板本体）、外半 `990`（=arrange）、`1794` 保持原生无动作。
 **没有任何原发 990 的像素被夺走。** 快照 `versions/1.4.1/`，DLL md5 `9f61863514c59cf034e43b864663fd29`。
 `anim_core.h` 与 1.3.0 逐字节相同（模型零改动）。
+
+## 十六、1.3.6：公开发布版（去掉设置入口）
+
+**用户要求**：去掉面向用户的设置入口，但**保留给作者自己调参用**；版本号 1.3.6；
+建 GitHub 仓库（署名 `bobo198504`）；README 中英两份；声明开源规范。
+
+### 做法（最小改动）
+
+- 调参窗口 + 它的 Extensions 菜单项 + `custom_action` 注册，整段包进 `#ifdef SWS_TUNING_UI`，
+  **默认不编译**。发布 DLL 里**没有任何设置界面**（实测 `SWS_SCROLL_TUNE` / `settings...` /
+  `AddExtensionsMainMenu` 出现 0 次）。
+- 作者调参：`./build.sh --tuning-ui`（可叠加 `--debug-log`）。
+- `build.sh` 现在按参数编译：默认 / `--tuning-ui` / `--debug-log`，未知参数报错退出。
+- 版本号写进 `ext_name`：`Smooth Wheel Scroll 1.3.6`。
+- 模型**零改动**（`anim_core.h` 仍与 1.0.0 逐字节相同，单格 1.89）。
+- 仓库：https://github.com/bobo198504/SmoothWheelScroll-REAPER，MIT，Release `v1.3.6`。
+- **`third_party/reaper-sdk-git` 去掉内嵌 `.git` 后作为普通文件随仓库附带**（否则会变成坏
+  gitlink，克隆后无法构建）。构建只依赖 `third_party/`，不需要联网。
+
+### 不要做
+
+- ❌ 不要把设置入口加回发布版（用户明确要去掉）。
+- ❌ 不要因为"发布"动模型或投递；本版只是对外形态变化。
