@@ -1,7 +1,7 @@
 # SmoothWheelScroll for REAPER 1.3.9
 
 **面向用户的设置面板正式发布**（1.3.6 曾移除设置入口，本版按用户要求做回来）。
-DLL md5 `186edfee59d1e0d0596eec880cd5b9e5`。
+DLL md5 `8bf22fa388b591b420fd192c4750fec4`（含下方 19.1–19.5 修复）。
 
 ## 面板
 
@@ -20,8 +20,8 @@ DLL md5 `186edfee59d1e0d0596eec880cd5b9e5`。
 | # | 参数 | 默认(=中心) | 范围 | 说明 |
 |---|---|---|---|---|
 | 1 | Start | 15.0 % | 5 – 45 | 第一格行程 |
-| 2 | Accel | 3.5 % | 0 – 12 | 每格增量 |
-| 3 | Release | 150 ms | 60 – 400 | 缓动时长 |
+| 2 | Accel | 3.5 % | 0 – 10 | 每格增量 |
+| 3 | Release | 150 ms | 60 – 300 | 缓动时长 |
 | 4 | High-speed hold | **1.0 x** | 0 – 2 | 乘在 `kTempoRefMs`（↑）与 `kSoftStart`（↓）；**0 = 关闭** |
 | 5 | High-speed coast | **1.0 x** | 0 – 2 | 乘在 `relGain`；**0 = 关闭** |
 
@@ -69,6 +69,76 @@ start / accel / release / hold / coast / glide
 - 关掉总开关时，这两条轴也**一并放行**（`OnAction` 在匹配后、Kick 前提前返回），
   即关闭 = 全面原生，无一例外。
 - 面板改动**不触碰** `Delivery`、不改判定逻辑、不改动作表。
+
+## 1.3.9.1 三处回归修复（滚动条暗色 / Dock 可逆 / 关闭后可再开）
+
+用户报三条，全在**面板生命周期与窗口主题**，**与模型无关**：`anim_core.h` 仍与 1.3.8
+逐字节相同，单格仍 **1.89 / 17.94**。
+
+1. **滚动条不随暗色主题**：窗口自带的 `WS_VSCROLL` 由**窗口主题**绘制，不受我们的画笔控制。
+   用 `SetWindowTheme(h, L"DarkMode_Explorer", nullptr)`（亮色传 `nullptr` 还原，**双向**）；
+   `uxtheme.dll` 动态加载，**不加静态导入**。滚动条在**非客户区**，故切主题后
+   `RedrawWindow(RDW_FRAME|RDW_INVALIDATE)`；滚动条出现/消失时补刷（`g_barThemed`），
+   `WM_THEMECHANGED` / `WM_SYSCOLORCHANGE` 一并重建画笔并令子控件重绘。
+2. **Dock 后无法回到浮动**：根因是每次开窗都无条件 `DockWindowAddEx(identstr)`，
+   而 REAPER 按 identstr 记忆位置 → 每次都被拉回 docker。改为**持久化偏好 `g_dockOn`**
+   （extstate key `dock`，默认 **false = 浮动**），**只有它为真才 AddEx**；
+   窗口**右键菜单** `Dock in Docker / Undock`，`ToggleDocking()` **销毁后重建**（同 SWS 做法）；
+   推子转发 `WM_CONTEXTMENU` 给父窗口，保证菜单点得到。
+3. **关闭后再也打不开**：`ShowConfigWindow` 三路处理已存在窗口 —— **在 docker 内 → `DockWindowActivate()`**；
+   **不可见 → `ShowWindow(SW_SHOW)`**（docker 折叠时是隐藏而非销毁，前台化隐藏窗口等于没反应）；
+   否则前台化。发现窗口已脱离 docker 而 `g_dockOn` 仍为真则就地改回并保存。
+   另把 `DockWindowRemove` 从 `WM_DESTROY` 移到 **`WM_CLOSE`**（`ToggleDocking` 自己先 remove）。
+
+## 1.3.9.2 Accel 上限收到 10%
+
+**用户要求**：`Accel`（加速堆量）上限从 12% 收到 **10%**——"这个值太大堆起来有点可怕"。
+
+- 只改 `kAccelMaxPct`：`12.0 → 10.0`。**默认值 3.5% 不动**，模型与全部机制不变
+  （`anim_core.h` 仍与 1.3.8 逐字节相同，单格仍 1.89 / 17.94）。
+- 因为范围是**单一来源**且读入过 `RefreshDerived` → `Clamp`，store 里若存着 >10 的旧值，
+  下次载入会被**自动钳到 10**，不会越界。
+
+## 1.3.9.3 设置动作改为开关
+
+**用户要求**：设置动作要能**反复开关**（可绑到快捷键），而不是只能开。
+
+- `g_cmdTune` 分支由 `ShowConfigWindow()` 改为 `ToggleConfigWindow()`：
+  **在屏 → `WM_CLOSE`；不在屏 → 打开**。
+- "在屏"判定包含 **docked**（折叠的 docker 会把子窗口隐藏，但它仍是用户要的那个面板，
+  不能当成"关着"，否则第一次按像没反应、第二次会开出第二个窗口）。
+- 菜单项文案随状态切换（`settings (close)` / `settings...`）。
+
+## 1.3.9.4 窗口位置遵守 REAPER 的定位规则
+
+**用户要求**："不管是窗口模式还是 Dock 模式，窗口的位置要遵循 REAPER 的定位规则，
+不要自己跑来跑去，或每次都出现在左上角"。
+
+改之前浮动窗口是用 `CW_USEDEFAULT` 创建的，所以**每次重建都落在系统默认位置**（左上角一带）。
+
+- **Dock 模式**：位置**完全由 REAPER 决定** —— `DockWindowAddEx` 恢复 REAPER 自己记在
+  `reaper.ini` 里的停靠位置，插件**不传任何几何**。
+- **浮动模式**：位置由插件记（extstate key `win` = `x y w h`）。
+  - 有记录 → 还原到该位置（尺寸也还原），并先过 `EnsureOnScreen()`：
+    显示器布局变化后旧坐标可能落在屏幕外，此时**只挪位置、不改尺寸**。
+  - 无记录（首次）→ `PlaceCenteredOnMain()`：**居中于 REAPER 主窗口**（略偏上），
+    与 REAPER 自己放对话框的方式一致，而不是丢到系统默认的左上角。
+- 记忆时机：`WM_EXITSIZEMOVE`（拖/缩放结束后存一次，不必每帧写 store）
+  + `WM_MOVE`/`WM_SIZE` 只更新内存；**`WM_CLOSE` 里再存一次**（关窗是最后能拿到有效矩形的时刻）。
+  `g_rectTracking` 只在窗口摆好之后才打开，避免创建/摆放过程中的临时尺寸被误记为用户意图。
+- 抽了三个小工具：`WindowInDock()`（"是否在 docker 里"只问一处）、
+  `MinWindowSize()`（`WM_GETMINMAXINFO` 与尺寸还原共用同一组下限）、`CaptureFloatGeom()`。
+- ⚠️ 顺手避了个坑：最初用 `sscanf` 解析 `win`，mingw 会链进整套格式化输入引擎，
+  `.text` 从 0xc3f0 暴涨到 **0x11ec0（+23KB）**。已改为**手写 `ParseLong`**，`.text` 回到 0xcab0。
+  改动后请留意这个体积特征，别无意中把大块 libc 拖进来。
+
+## 1.3.9.5 Release 上限收到 300ms（用户要求）
+
+**用户要求**："Rel 上限改到 300ms，其它不变"。
+
+- 只改 `kReleaseMaxMs`：`400.0 → 300.0`。**默认仍 150ms**，模型/机制/其它 4 个参数全不动
+  （`anim_core.h` 仍与 1.3.8 逐字节相同，单格 1.89 / 17.94）。
+- 同样过 `RefreshDerived` → `Clamp`：store 里若残留 >300 的旧值，载入自动钳到 300。
 
 ## 验收
 

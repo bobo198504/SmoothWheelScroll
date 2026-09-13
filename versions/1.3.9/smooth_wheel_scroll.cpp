@@ -32,6 +32,7 @@
 // independent of REAPER; test/anim_sim.cpp exercises it standalone.
 
 #include <windows.h>
+#include <windowsx.h> // GET_X_LPARAM / GET_Y_LPARAM for the right-click menu
 #include <commctrl.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -65,6 +66,11 @@
 // Theme colours, so the settings window follows REAPER's look (and its light/dark
 // theme) instead of hard-coded faces. See ResolveTheme.
 #define REAPERAPI_WANT_GetThemeColor
+// Docking, so the settings window can live in REAPER's dock. See ShowConfigWindow.
+#define REAPERAPI_WANT_DockWindowAddEx
+#define REAPERAPI_WANT_DockWindowActivate
+#define REAPERAPI_WANT_DockWindowRemove
+#define REAPERAPI_WANT_DockIsChildOfDock
 #ifndef SWS_NO_SETTINGS_UI
 #define REAPERAPI_WANT_AddExtensionsMainMenu
 #endif
@@ -145,12 +151,12 @@ static const double kStartMaxPct = 45.0;
 // --- 2. ACCEL -----------------------------------------------------------------
 static const double kDefaultAccelPct = 3.5;
 static const double kAccelMinPct = 0.0;
-static const double kAccelMaxPct = 12.0;
+static const double kAccelMaxPct = 10.0;
 
 // --- 3. RELEASE ---------------------------------------------------------------
 static const double kDefaultReleaseMs = 150.0;
 static const double kReleaseMinMs = 60.0;
-static const double kReleaseMaxMs = 400.0;
+static const double kReleaseMaxMs = 300.0;
 
 // --- 4. HIGH-SPEED HOLD -------------------------------------------------------
 // Two mechanisms keep a fast roll from accelerating without bound. They are scaled
@@ -189,6 +195,20 @@ static double g_coast = kDefaultCoast;
 // Master switch: off = the plugin adds no animation at all and every wheel goes to
 // REAPER untouched (see GetMsgProc / OnAction / InstallHook).
 static bool g_glideOn = true;
+// Whether the settings window should come up inside REAPER's docker. Kept as our own
+// preference because REAPER also remembers a placement per ident string, and the two
+// together are what caused the window to be dragged back into the dock on every open
+// (so it could never be restored to a normal floating window).
+static bool g_dockOn = false;
+// The FLOATING window's own geometry, remembered across opens and restarts so the panel
+// reappears where the user left it. Without this the window was recreated at the OS
+// default position on every open and always came up near the top-left corner.
+//
+// Docked geometry is deliberately NOT kept here: when the window is in a docker REAPER
+// owns its position and restores it through DockWindowAddEx (reaper.ini), so duplicating
+// that would only be a second, competing memory.
+static RECT g_floatRect = {0, 0, 0, 0};
+static bool g_floatRectValid = false;
 
 // --- 6. RESERVED: transition curve (MARKED, NOT BUILT) ------------------------
 // Going from the lone notch (full onset ramp) into a roll (short window) is currently
@@ -427,9 +447,9 @@ enum class Delivery
 };
 
 #ifndef SWS_NO_SETTINGS_UI
-// Tuning window (defined further down, also only in a tuning build); its action id
-// is handled in OnAction.
+// Settings window (defined further down); its action id is handled in OnAction.
 static void ShowConfigWindow();
+static void ToggleConfigWindow();
 static int g_cmdTune;
 #endif
 
@@ -437,6 +457,13 @@ static int g_cmdTune;
 // both go through here, so no value outside the range can ever reach the model --
 // that is what makes "min and max cannot go wrong" hold at both ends.
 static double Clamp(double v, double lo, double hi)
+{
+  return v < lo ? lo : (v > hi ? hi : v);
+}
+
+// Same for a colour component, so deriving a border colour from the theme background
+// cannot wrap around at black or white.
+static int ClampInt(int v, int lo, int hi)
 {
   return v < lo ? lo : (v > hi ? hi : v);
 }
@@ -479,8 +506,19 @@ static void SaveSettings()
   _snprintf(buf, sizeof(buf), "%.6f", g_coast);
   SetExtState(kStateSection, "coast", buf, true);
   SetExtState(kStateSection, "glide", g_glideOn ? "1" : "0", true);
-  Log("settings saved: start=%.2f accel=%.2f release=%.1f hold=%.2f coast=%.2f glide=%d",
-      g_startPct, g_accelPct, g_releaseMs, g_hold, g_coast, g_glideOn ? 1 : 0);
+  SetExtState(kStateSection, "dock", g_dockOn ? "1" : "0", true);
+  // Window geometry as "x y w h". Written only once a floating geometry is known, so an
+  // install that has never been moved does not pin a position it never had.
+  if (g_floatRectValid)
+  {
+    _snprintf(buf, sizeof(buf), "%ld %ld %ld %ld", (long)g_floatRect.left,
+              (long)g_floatRect.top, (long)(g_floatRect.right - g_floatRect.left),
+              (long)(g_floatRect.bottom - g_floatRect.top));
+    SetExtState(kStateSection, "win", buf, true);
+  }
+  Log("settings saved: start=%.2f accel=%.2f release=%.1f hold=%.2f coast=%.2f glide=%d dock=%d",
+      g_startPct, g_accelPct, g_releaseMs, g_hold, g_coast, g_glideOn ? 1 : 0,
+      g_dockOn ? 1 : 0);
 }
 
 // Read a key back as a double; returns false when absent or unparseable, so the
@@ -497,6 +535,30 @@ static bool LoadDouble(const char *key, double *out)
   if (end == s)   // nothing parsed
     return false;
   *out = v;
+  return true;
+}
+
+// Read one long from a string and advance past it. Hand-rolled rather than sscanf: the C
+// library's formatted-input engine is large (linking it cost ~23 KB of code) and this is
+// only ever used for the window rectangle below.
+static bool ParseLong(const char **p, long *out)
+{
+  const char *s = *p;
+  while (*s == ' ' || *s == '\t')
+    ++s;
+  bool neg = false;
+  if (*s == '-' || *s == '+')
+  {
+    neg = (*s == '-');
+    ++s;
+  }
+  if (*s < '0' || *s > '9')
+    return false;
+  long v = 0;
+  while (*s >= '0' && *s <= '9')
+    v = v * 10 + (*s++ - '0');
+  *out = neg ? -v : v;
+  *p = s;
   return true;
 }
 
@@ -522,22 +584,35 @@ static void LoadSettings()
     const char *g = GetExtState(kStateSection, "glide");
     if (g && *g)
       g_glideOn = (g[0] != '0');
+    const char *d = GetExtState(kStateSection, "dock");
+    if (d && *d)
+      g_dockOn = (d[0] != '0');
+    // Window geometry, if one was ever recorded. A malformed or partial value is simply
+    // ignored, which leaves the window to open at its default placement.
+    const char *w = GetExtState(kStateSection, "win");
+    long wx = 0, wy = 0, ww = 0, wh = 0;
+    const char *wp = w;
+    if (wp && ParseLong(&wp, &wx) && ParseLong(&wp, &wy) && ParseLong(&wp, &ww) &&
+        ParseLong(&wp, &wh) && ww > 0 && wh > 0)
+    {
+      g_floatRect.left = (LONG)wx;
+      g_floatRect.top = (LONG)wy;
+      g_floatRect.right = (LONG)(wx + ww);
+      g_floatRect.bottom = (LONG)(wy + wh);
+      g_floatRectValid = true;
+    }
   }
   RefreshDerived(); // clamps everything into range
-  Log("settings loaded: start=%.2f accel=%.2f release=%.1f hold=%.2f coast=%.2f glide=%d",
-      g_startPct, g_accelPct, g_releaseMs, g_hold, g_coast, g_glideOn ? 1 : 0);
+  Log("settings loaded: start=%.2f accel=%.2f release=%.1f hold=%.2f coast=%.2f glide=%d dock=%d",
+      g_startPct, g_accelPct, g_releaseMs, g_hold, g_coast, g_glideOn ? 1 : 0,
+      g_dockOn ? 1 : 0);
 }
 
-static void ResetSettings()
-{
-  g_startPct = kDefaultStartPct;
-  g_accelPct = kDefaultAccelPct;
-  g_releaseMs = kDefaultReleaseMs;
-  g_hold = kDefaultHold;
-  g_coast = kDefaultCoast;
-  g_glideOn = true;
-  RefreshDerived();
-}
+// (There is no "reset everything" function any more: a RESET button was replaced by
+//  double-clicking a fader, which restores just that one parameter -- the gesture
+//  REAPER uses on its own faders and knobs. Restoring everything at once has no
+//  natural gesture and no longer has a control, so the code is gone rather than left
+//  unreachable.)
 
 struct ActionSpec
 {
@@ -1152,7 +1227,9 @@ static bool OnAction(KbdSectionInfo *sec, int command, int val, int val2, int re
   // separate hookcommand -- which never fires for a custom_action.
   if (command == g_cmdTune)
   {
-    ShowConfigWindow();
+    // A TOGGLE, not just "open": the action can be bound to a key and pressed again to
+    // close the panel, so the same binding both opens and closes it.
+    ToggleConfigWindow();
     return true;
   }
 #endif
@@ -1671,10 +1748,6 @@ enum
   IDC_L_RELEASE,
   IDC_L_HOLD,
   IDC_L_COAST,
-  IDC_L_HINT = 1201,
-  IDC_B_RESET,
-  IDC_B_CLOSE,
-  IDC_L_ABOUT = 1220
 };
 
 static const int kNumSliders = 5;
@@ -1691,8 +1764,28 @@ struct SliderSpec
 };
 
 static SliderSpec g_sliders[kNumSliders];
+static int g_faderPos[kNumSliders]; // 0..1000, one per fader (parallel to g_sliders)
 static HWND g_cfgWnd = nullptr;
 static bool g_cfgUpdating = false;
+// The controls that need repositioning on resize. Held by handle rather than looked up
+// by id, because the end-cap labels have no id of their own.
+static HWND g_chkGlide = nullptr;
+static HWND g_capLo[kNumSliders], g_capHi[kNumSliders];
+// (No footer label handles: the two footer texts were removed -- they occupied space
+//  without telling the user anything they could act on.)
+// Scrolling state. The panel keeps its compact spacing always; when the window is too
+// short for the content it scrolls instead of squeezing the rows. That is what makes
+// adding more parameters later safe -- they just extend the scrollable height.
+static int g_contentH = 0;   // full height the content needs
+static int g_scrollY = 0;    // current scroll offset, >= 0
+static int g_scrollStep = 40;
+// Remembered so the window theme is re-applied exactly when the scrollbar is shown or
+// hidden, and not on every layout pass. Reset with the window.
+static bool g_barThemed = false;
+// Arms the geometry tracking in CfgProc. It stays off while the window is being created
+// and placed, so the transient sizes and positions that happen during setup are not
+// mistaken for where the user wants the panel.
+static bool g_rectTracking = false;
 
 static double SliderToValue(const SliderSpec &s, int pos)
 {
@@ -1713,11 +1806,53 @@ static int ValueToSlider(const SliderSpec &s, double v)
 struct Theme
 {
   COLORREF bg, text, sub, edit, track;
+  COLORREF line;        // separator and group-outline colour, derived from bg
+  COLORREF card;        // group surface fill (a touch off the background)
+  COLORREF faderBg;     // fader groove fill
+  COLORREF faderThumb;  // fader handle
   HBRUSH bgBrush;
   bool dark;
 };
 
 static Theme g_theme = {0};
+
+// The dialog font. Without this Win32 falls back to the old bitmap "System" font, which
+// is what made the panel look unlike the rest of the application: REAPER's own dialogs
+// use the shell's message font. Also returns the row height implied by that font, so
+// the layout is sized by text rather than by guessed pixels.
+static HFONT g_uiFont = nullptr;
+
+static HFONT UiFont(int *fontPx)
+{
+  if (!g_uiFont)
+  {
+    NONCLIENTMETRICSA ncm = {0};
+    ncm.cbSize = sizeof(ncm);
+    if (SystemParametersInfoA(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0))
+      g_uiFont = CreateFontIndirectA(&ncm.lfMessageFont);
+    if (!g_uiFont)
+      g_uiFont = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
+  }
+  if (fontPx)
+  {
+    HDC dc = GetDC(nullptr);
+    HGDIOBJ old = SelectObject(dc, g_uiFont);
+    TEXTMETRICA tm = {0};
+    GetTextMetricsA(dc, &tm);
+    SelectObject(dc, old);
+    ReleaseDC(nullptr, dc);
+    *fontPx = tm.tmHeight;
+  }
+  return g_uiFont;
+}
+
+static void ApplyFontToChildren(HWND parent)
+{
+  const HFONT f = UiFont(nullptr);
+  HWND c = nullptr;
+  while ((c = FindWindowExA(parent, c, nullptr, nullptr)) != nullptr)
+    SendMessageA(c, WM_SETFONT, (WPARAM)f, TRUE);
+}
 
 static void ResolveTheme()
 {
@@ -1761,6 +1896,67 @@ static void ResolveTheme()
     g_theme.edit = RGB(255, 255, 255);
     g_theme.track = RGB(205, 205, 205);
   }
+
+  // Fader groove and thumb. gen_vol* is what REAPER's generic windows use, but it is
+  // NOT always readable through GetThemeColor (it returned -1 on this dark theme), so
+  // col_buttonbg / col_main_bg2 -- which are readable -- are tried as well. Whatever
+  // is not provided is DERIVED from the background, which guarantees a usable value on
+  // any theme.
+  struct Cand { const char *key; int *slot; int fallbackStep; };
+  int fbg = -1, fth = -1, fcard = -1, fline = -1;
+  if (GetThemeColor)
+  {
+    static const char *kGroove[] = {"gen_volbg_horz", "col_main_bg2", "col_main_editbk"};
+    static const char *kThumb[]  = {"gen_volthumb_horz", "col_buttonbg", "col_main_3dhl"};
+    static const char *kCard[]   = {"col_buttonbg", "col_main_bg2"};
+    static const char *kLine[]   = {"col_main_3dsh", "col_tl_bg"};
+    for (size_t i = 0; i < 3 && fbg < 0; ++i)  fbg  = GetThemeColor(kGroove[i], 0);
+    for (size_t i = 0; i < 3 && fth < 0; ++i)  fth  = GetThemeColor(kThumb[i], 0);
+    for (size_t i = 0; i < 2 && fcard < 0; ++i) fcard = GetThemeColor(kCard[i], 0);
+    for (size_t i = 0; i < 2 && fline < 0; ++i) fline = GetThemeColor(kLine[i], 0);
+  }
+
+  // Derive anything the theme did not give. "+step" lifts a dark theme and darkens a
+  // light one by the same small amount, so structure reads on either.
+  // The outline must be clearly readable AGAINST the card, not just against the
+  // background, so the step is larger than a subtle one. Measured requirement: a
+  // 1px line whose contrast with its own fill is under ~20 levels is invisible.
+  const int step = (lum < 128) ? 30 : -30;
+  const COLORREF dcard = RGB(ClampInt(GetRValue(bg) + step / 2, 0, 255),
+                             ClampInt(GetGValue(bg) + step / 2, 0, 255),
+                             ClampInt(GetBValue(bg) + step / 2, 0, 255));
+  const COLORREF dline = RGB(ClampInt(GetRValue(bg) + step, 0, 255),
+                             ClampInt(GetGValue(bg) + step, 0, 255),
+                             ClampInt(GetBValue(bg) + step, 0, 255));
+  // The thumb must be clearly brighter (dark theme) or darker (light theme) than the
+  // card so the handle is obviously a handle.
+  const COLORREF dthumb = RGB(ClampInt(GetRValue(bg) + step * 4, 0, 255),
+                              ClampInt(GetGValue(bg) + step * 4, 0, 255),
+                              ClampInt(GetBValue(bg) + step * 4, 0, 255));
+
+  g_theme.card  = (fcard >= 0) ? (COLORREF)(fcard & 0xFFFFFF) : dcard;
+  g_theme.line  = (fline >= 0) ? (COLORREF)(fline & 0xFFFFFF) : dline;
+  g_theme.faderBg = (fbg >= 0) ? (COLORREF)(fbg & 0xFFFFFF) : dline;
+  g_theme.faderThumb = (fth >= 0) ? (COLORREF)(fth & 0xFFFFFF) : dthumb;
+
+  // Contrast guards. A groove that matches the card would be invisible, and a thumb
+  // that matches its groove would vanish -- both are checked and replaced with the
+  // derived colours, so the fader is always readable whatever the theme supplies.
+  int dr = abs((int)GetRValue(g_theme.faderThumb) - (int)GetRValue(g_theme.faderBg));
+  int dg = abs((int)GetGValue(g_theme.faderThumb) - (int)GetGValue(g_theme.faderBg));
+  int db = abs((int)GetBValue(g_theme.faderThumb) - (int)GetBValue(g_theme.faderBg));
+  if (dr + dg + db < 60)
+    g_theme.faderThumb = dthumb;
+
+  dr = abs((int)GetRValue(g_theme.faderBg) - (int)GetRValue(g_theme.card));
+  dg = abs((int)GetGValue(g_theme.faderBg) - (int)GetGValue(g_theme.card));
+  db = abs((int)GetBValue(g_theme.faderBg) - (int)GetBValue(g_theme.card));
+  if (dr + dg + db < 40)
+    g_theme.faderBg = dline;   // one step further from the card
+
+  Log("theme: card=%06x line=%06x groove=%06x thumb=%06x",
+      (unsigned)g_theme.card, (unsigned)g_theme.line,
+      (unsigned)g_theme.faderBg, (unsigned)g_theme.faderThumb);
 }
 
 static void UpdateLabels()
@@ -1774,13 +1970,6 @@ static void UpdateLabels()
     _snprintf(buf, sizeof(buf), "%s: %.*f %s", s.name, dec, *s.value, s.unit);
     SetWindowTextA(GetDlgItem(g_cfgWnd, s.labelId), buf);
   }
-  char hint[320];
-  _snprintf(hint, sizeof(hint),
-            "Steps of one wheel notch, unhurried rhythm:  1st %.0f%%  2nd %.0f%%  "
-            "3rd %.0f%%  4th %.0f%%   (a faster roll multiplies the steps)",
-            g_startPct, g_startPct + g_accelPct, g_startPct + 2 * g_accelPct,
-            g_startPct + 3 * g_accelPct);
-  SetWindowTextA(GetDlgItem(g_cfgWnd, IDC_L_HINT), hint);
 }
 
 static void PushValuesToSliders()
@@ -1792,14 +1981,43 @@ static void PushValuesToSliders()
   for (int i = 0; i < kNumSliders; ++i)
   {
     const SliderSpec &s = g_sliders[i];
-    SendDlgItemMessageA(g_cfgWnd, s.sliderId, TBM_SETPOS, TRUE, ValueToSlider(s, *s.value));
+    g_faderPos[i] = ValueToSlider(s, *s.value);
+    HWND f = g_cfgWnd ? GetDlgItem(g_cfgWnd, s.sliderId) : nullptr;
+    if (f)
+      InvalidateRect(f, nullptr, FALSE);
   }
   g_cfgUpdating = was;
   UpdateLabels();
 }
 
 // Repaint every control with the theme colours. Called on create and on WM_CTLCOLOR*.
-static LRESULT OnCtlColor(UINT msg, HDC hdc)
+// Panel chrome. The group outlines are drawn in the PARENT window, not by the
+// controls, and the control areas are excluded so the painting never fights what the
+// child controls draw. That is what gives each group a surface (a "card") without
+// needing owner-drawn controls.
+static RECT g_cardRect[kNumSliders];    // each group's fill area and hit-test rect
+static RECT g_groupRect = {0, 0, 0, 0}; // the whole block, drawn as ONE outer frame
+static HBRUSH g_cardBrush = nullptr;
+static HBRUSH g_lineBrush = nullptr;
+static RECT g_headRect = {0, 0, 0, 0};
+static RECT g_sepRect = {0, 0, 0, 0}; // thin rule under the master switch
+static bool g_hasCards = false;
+
+// (Re)create the three solid brushes from the current theme colours. Kept in one place
+// because the brushes are rebuilt both when the window is created and whenever the
+// theme changes while it is open -- ResolveTheme only updates the colours, so a rebuild
+// that forgot a brush would paint the old theme's colour after a switch.
+static void RebuildThemeBrushes()
+{
+  if (g_theme.bgBrush) DeleteObject(g_theme.bgBrush);
+  g_theme.bgBrush = CreateSolidBrush(g_theme.bg);
+  if (g_cardBrush) DeleteObject(g_cardBrush);
+  g_cardBrush = CreateSolidBrush(g_theme.card);
+  if (g_lineBrush) DeleteObject(g_lineBrush);
+  g_lineBrush = CreateSolidBrush(g_theme.line);
+}
+
+static LRESULT OnCtlColor(UINT msg, HDC hdc, HWND child)
 {
   const bool isEdit = (msg == WM_CTLCOLOREDIT || msg == WM_CTLCOLORLISTBOX);
   SetBkMode(hdc, TRANSPARENT);
@@ -1807,31 +2025,664 @@ static LRESULT OnCtlColor(UINT msg, HDC hdc)
   {
     SetTextColor(hdc, g_theme.text);
     SetBkColor(hdc, g_theme.edit);
+    return (LRESULT)g_theme.bgBrush;
+  }
+  // Controls that sit inside a group card are given the card's fill, so the card reads
+  // as a surface rather than an empty frame around the panel background. The child
+  // handle comes from the message's lParam (WM_CTLCOLOR* passes it).
+  if (g_cardBrush && child && g_cfgWnd)
+  {
+    RECT r = {0};
+    if (GetWindowRect(child, &r))
+    {
+      POINT p = {r.left, r.top};
+      ScreenToClient(g_cfgWnd, &p);
+      for (int i = 0; i < kNumSliders; ++i)
+      {
+        const RECT &c = g_cardRect[i];
+        if (p.x >= c.left && p.x < c.right && p.y >= c.top && p.y < c.bottom)
+        {
+          SetTextColor(hdc, g_theme.text);
+          SetBkColor(hdc, g_theme.card);
+          return (LRESULT)g_cardBrush;
+        }
+      }
+    }
+  }
+  SetTextColor(hdc, g_theme.text);
+  SetBkColor(hdc, g_theme.bg);
+  return (LRESULT)g_theme.bgBrush;
+}
+
+static void PaintPanel(HWND h)
+{
+  PAINTSTRUCT ps;
+  HDC dc = BeginPaint(h, &ps);
+
+  // Start from the background, then lay the chrome on top.
+  RECT rc;
+  GetClientRect(h, &rc);
+  FillRect(dc, &rc, g_theme.bgBrush);
+
+  if (g_hasCards)
+  {
+    // Group surfaces. Each is filled with the card colour and outlined with a uniform
+    // 1px frame.
+    //
+    // FrameRect, not Rectangle: GDI's Rectangle() draws its right and bottom edges one
+    // pixel OUTSIDE the given rectangle, so a 1-pixel box comes out heavier on two
+    // sides than the other two. FrameRect puts the border exactly inside the rect on
+    // all four sides, which is what makes every line in the panel the same weight.
+    if (g_cardBrush && g_lineBrush)
+    {
+      // Fill every group, then outline the BLOCK rather than each card. The cards sit
+      // flush against one another (no gap), so framing each one would draw a 2px line
+      // where two frames meet while the outer edge stayed 1px -- visibly uneven. One
+      // outer frame plus a 1px separator at each boundary keeps every line the same
+      // weight and reads as a single continuous block.
+      for (int i = 0; i < kNumSliders; ++i)
+        FillRect(dc, &g_cardRect[i], g_cardBrush);
+
+      FrameRect(dc, &g_groupRect, g_lineBrush);
+      for (int i = 1; i < kNumSliders; ++i)
+      {
+        RECT sep = {g_groupRect.left, g_cardRect[i].top, g_groupRect.right,
+                    g_cardRect[i].top + 1};
+        FillRect(dc, &sep, g_lineBrush);
+      }
+      // A rule under the master switch, so the switch reads as a separate header.
+      RECT sep = g_sepRect;
+      FillRect(dc, &sep, g_lineBrush);
+    }
+  }
+
+  EndPaint(h, &ps);
+}
+
+// ---------------------------------------------------------------------------
+// The fader control
+//
+// A trackbar cannot be made to look like REAPER's faders: the common control has no
+// owner-draw style (there is no TBS_OWNERDRAW), so its look is whatever Windows draws.
+// This is therefore a small control of our own, painted with REAPER's own generic
+// fader colours (gen_volbg_horz / gen_volthumb_horz -- see ResolveTheme), which is
+// what REAPER's generic windows use for their horizontal faders.
+//
+// Because it is ours, the geometry is also exact: the groove and the thumb are laid
+// out from odd/even pixel counts and drawn with FillRect, so every line in the panel
+// comes out the same weight (GDI's Rectangle() would put the right/bottom border one
+// pixel outside, which is what made the earlier frames look uneven).
+// ---------------------------------------------------------------------------
+#define SWSC_FADER_CLASS "SmoothWheelScrollFader"
+#define SWSC_FADER_CHANGED (WM_APP + 17) // wParam = control id, lParam = new pos
+#define SWSC_FADER_RESET (WM_APP + 18)   // wParam = control id  (double click)
+
+static void FaderTrackRect(HWND h, RECT *out)
+{
+  RECT rc;
+  GetClientRect(h, &rc);
+  const int thumbW = 11;
+  out->left = thumbW / 2;
+  out->right = rc.right - (thumbW - thumbW / 2);
+  out->top = rc.top;
+  out->bottom = rc.bottom;
+}
+
+static void FaderPaint(HWND h, int idx)
+{
+  PAINTSTRUCT ps;
+  HDC dc = BeginPaint(h, &ps);
+
+  RECT rc;
+  GetClientRect(h, &rc);
+  // The control sits on a card, so its background is the card colour, not the window's.
+  HBRUSH card = CreateSolidBrush(g_theme.card);
+  FillRect(dc, &rc, card);
+  DeleteObject(card);
+
+  RECT tr;
+  FaderTrackRect(h, &tr);
+  const int cy = (rc.top + rc.bottom) / 2;
+
+  // Groove: a thin bar down the middle of the control.
+  const int grooveH = 4;
+  RECT g = {tr.left, cy - grooveH / 2, tr.right, cy - grooveH / 2 + grooveH};
+  HBRUSH gb = CreateSolidBrush(g_theme.faderBg);
+  FillRect(dc, &g, gb);
+  DeleteObject(gb);
+
+  // Thumb: a vertical bar straddling the track, positioned by the value.
+  const int pos = g_faderPos[idx];
+  const int span = tr.right - tr.left;
+  const int cx = tr.left + (span * pos + 500) / 1000;
+  const int thumbW = 11;
+  const int thumbH = (rc.bottom - rc.top) - 4;
+  RECT t = {cx - thumbW / 2, cy - thumbH / 2, cx - thumbW / 2 + thumbW, cy - thumbH / 2 + thumbH};
+
+  HBRUSH tb = CreateSolidBrush(g_theme.faderThumb);
+  FillRect(dc, &t, tb);
+  DeleteObject(tb);
+  // A 1px outline in the line colour, so the thumb reads on any theme.
+  HBRUSH lb = CreateSolidBrush(g_theme.line);
+  FrameRect(dc, &t, lb);
+  DeleteObject(lb);
+
+  EndPaint(h, &ps);
+}
+
+// Turn a click x into 0..1000, clamped at both ends.
+static int FaderPosFromX(HWND h, int x)
+{
+  RECT tr;
+  FaderTrackRect(h, &tr);
+  const int span = tr.right - tr.left;
+  if (span <= 0)
+    return 0;
+  int p = (int)(((long long)(x - tr.left) * 1000 + span / 2) / span);
+  if (p < 0) p = 0;
+  if (p > 1000) p = 1000;
+  return p;
+}
+
+static void FaderSetPos(HWND h, int idx, int pos, bool notify)
+{
+  if (pos < 0) pos = 0;
+  if (pos > 1000) pos = 1000;
+  if (g_faderPos[idx] == pos)
+    return;
+  g_faderPos[idx] = pos;
+  InvalidateRect(h, nullptr, FALSE);
+  if (notify)
+    SendMessage(GetParent(h), SWSC_FADER_CHANGED, (WPARAM)GetDlgCtrlID(h), (LPARAM)pos);
+}
+
+static LRESULT CALLBACK FaderProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
+{
+  const int idx = (int)(INT_PTR)GetWindowLongPtrA(h, GWLP_USERDATA);
+  switch (msg)
+  {
+  case WM_PAINT:
+    FaderPaint(h, idx);
+    return 0;
+  case WM_ERASEBKGND:
+    return 1; // painted in WM_PAINT
+  case WM_LBUTTONDOWN:
+  {
+    SetCapture(h);
+    SetFocus(h);
+    FaderSetPos(h, idx, FaderPosFromX(h, ((int)(short)LOWORD(lp))), true);
+    return 0;
+  }
+  case WM_LBUTTONDBLCLK:
+    // Double click restores this one parameter to its default -- the same gesture
+    // REAPER uses on its own faders and knobs, rather than a separate Reset button.
+    // Handled here (not by the parent) because only the control knows which slider it
+    // is; the parent performs the actual restore and the save.
+    SendMessage(GetParent(h), SWSC_FADER_RESET, (WPARAM)GetDlgCtrlID(h), 0);
+    return 0;
+  case WM_MOUSEMOVE:
+    if (GetCapture() == h)
+      FaderSetPos(h, idx, FaderPosFromX(h, ((int)(short)LOWORD(lp))), true);
+    return 0;
+  case WM_LBUTTONUP:
+    if (GetCapture() == h)
+      ReleaseCapture();
+    return 0;
+  case WM_MOUSEWHEEL:
+  {
+    // While the panel is scrolled (content taller than the window), the wheel scrolls
+    // the panel instead of nudging the value -- otherwise a wheel over a fader would
+    // move the value and never reach the panel, and the scrolled rows would be
+    // unreachable. When everything fits, the wheel adjusts the value, the way REAPER's
+    // own faders behave.
+    if (g_contentH > 0)
+    {
+      RECT pr;
+      GetClientRect(GetParent(h), &pr);
+      if (g_contentH > pr.bottom)
+      {
+        SendMessage(GetParent(h), WM_MOUSEWHEEL, wp, lp);
+        return 0;
+      }
+    }
+    const int delta = ((short)HIWORD(wp));
+    FaderSetPos(h, idx, g_faderPos[idx] + (delta > 0 ? 10 : -10), true);
+    return 0;
+  }
+  case WM_KEYDOWN:
+    if (wp == VK_LEFT)  { FaderSetPos(h, idx, g_faderPos[idx] - 10, true); return 0; }
+    if (wp == VK_RIGHT) { FaderSetPos(h, idx, g_faderPos[idx] + 10, true); return 0; }
+    if (wp == VK_HOME)  { FaderSetPos(h, idx, 0, true); return 0; }
+    if (wp == VK_END)   { FaderSetPos(h, idx, 1000, true); return 0; }
+    break;
+  case WM_SETFOCUS:
+    InvalidateRect(h, nullptr, FALSE);
+    return 0;
+  case WM_KILLFOCUS:
+    InvalidateRect(h, nullptr, FALSE);
+    return 0;
+  case WM_CONTEXTMENU:
+    // The panel's Dock / Undock menu belongs to the whole window, not to a fader. The
+    // faders cover most of the card area, so without forwarding, a right-click would
+    // fall on a fader and the menu would rarely be reachable.
+    SendMessageA(GetParent(h), WM_CONTEXTMENU, wp, lp);
+    return 0;
+  }
+  return DefWindowProcA(h, msg, wp, lp);
+}
+
+static void RegisterFaderClass()
+{
+  static bool done = false;
+  if (done)
+    return;
+  WNDCLASSA wc = {0};
+  wc.lpfnWndProc = FaderProc;
+  wc.hInstance = g_hInst;
+  wc.hCursor = LoadCursor(nullptr, IDC_HAND);
+  wc.hbrBackground = nullptr;
+  // Without CS_DBLCLKS the control never receives WM_LBUTTONDBLCLK, which is what
+  // double-click-to-reset needs.
+  wc.style = CS_DBLCLKS;
+  wc.lpszClassName = SWSC_FADER_CLASS;
+  RegisterClassA(&wc);
+  done = true;
+}
+
+// Width of a string in the panel font, measured rather than assumed.
+static int MeasureTextWidth(const char *text)
+{
+  if (!text || !*text)
+    return 0;
+  HDC dc = GetDC(nullptr);
+  HGDIOBJ oldFont = SelectObject(dc, UiFont(nullptr));
+  SIZE sz = {0};
+  GetTextExtentPoint32A(dc, text, (int)strlen(text), &sz);
+  SelectObject(dc, oldFont);
+  ReleaseDC(nullptr, dc);
+  return sz.cx;
+}
+
+// The master switch's caption. It is also the widest single line the panel has to keep
+// on one line, so the minimum width is derived from it (see MinPanelWidth) rather than
+// being a number that happens to look right at one font size.
+static const char *kEnableText =
+    "Enable smooth scrolling   (off = REAPER's native wheel)";
+
+// --- Layout -----------------------------------------------------------------
+//
+// All panel geometry in one place, recomputed on demand rather than cached at build
+// time. That is what lets the panel re-flow when its size changes -- and its size DOES
+// change: REAPER's docker resizes the window when it is docked or undocked, and the
+// user can resize it either way.
+struct PanelMetrics
+{
+  int fontH, pad, groupH, barH, rowH, headH, hintH, btnH, capW, cardPad, gapY;
+};
+
+static PanelMetrics PanelMetricsNow()
+{
+  PanelMetrics m;
+  m.fontH = 16;
+  UiFont(&m.fontH);       // also yields the row height the font needs
+  m.pad = 16;             // window edge padding
+  m.groupH = m.fontH + 6; // title line
+  m.barH = m.fontH + 10;  // fader height
+  m.capW = 56;            // end-cap label width
+  m.cardPad = 9;          // padding between a card's frame and its contents (all sides)
+  m.gapY = 0;             // no gap: the cards stack directly, reading as one block
+  m.headH = m.fontH + 12; // one line of caption; the box is shorter than the text line
+  m.hintH = 0; // filled in by PanelFooterHeight(), which measures the wrapped text
+  m.btnH = m.fontH + 12;
+  // rowH is the distance from one card's top to the next: the card itself (title +
+  // fader + the SAME padding above and below) plus the gap to the next card. Equal
+  // padding top and bottom is the point -- the group has to breathe the same at both
+  // ends rather than sit flush against the frame's lower edge.
+  m.rowH = (m.groupH + m.barH + m.cardPad * 2) + m.gapY;
+  return m;
+}
+
+// The height at which the panel needs no scrollbar. Nothing is reserved for a bar: at
+// this size the content fits, so none is shown.
+static int PanelIdealHeight(const PanelMetrics &m)
+{
+  return m.pad + m.headH + m.rowH * kNumSliders + m.pad;
+}
+
+// The narrowest client width at which the master switch's caption still fits on ONE line.
+// Measured by the check box itself, so it stays correct at another font or DPI; a wider
+// system font simply raises the floor.
+static int MinPanelWidth(const PanelMetrics &m)
+{
+  // The check box's glyph is a standard menu check: SM_CXMENUCHECK is its width (17 px
+  // here). Button_GetIdealSize was tried first and DOES NOT WORK for a check box -- it
+  // returns failure, which silently made this one size too narrow and let the caption
+  // wrap, bringing the scrollbar back. Text width comes from the font metric, the glyph
+  // from the system metric.
+  const int boxW = GetSystemMetrics(SM_CXMENUCHECK);
+  const int gap = 6; // between the glyph and its caption
+  return m.pad * 2 + boxW + gap + MeasureTextWidth(kEnableText);
+}
+
+static void LayoutControls(HWND h); // defined below FitWindowToContent
+static void ApplyWindowTheme(HWND h, bool dark); // defined below (theming section)
+// Window-placement helpers, defined with the rest of the placement code further down.
+static bool WindowInDock(HWND h);
+static void MinWindowSize(const PanelMetrics &m, LONG *outW, LONG *outH);
+static void CaptureFloatGeom(HWND h);
+
+// Size the window so the laid-out content fits exactly, with no scrollbar. Rather than
+// trusting a computed minimum, this asks the LAYOUT what it needs after running once and
+// then grows the window to match -- so it cannot be wrong at another font, DPI or theme:
+// the caption's real width and the rows' real height are measured by the controls
+// themselves, not estimated.
+static void FitWindowToContent(HWND h)
+{
+  const PanelMetrics m = PanelMetricsNow();
+
+  // Everything is derived from what the controls actually need, measured after a real
+  // layout pass -- no hand-added minimums, so it cannot be off at another font or DPI.
+  //
+  //   1. the check box must stay on ONE line: ask it how tall it wants to be for the
+  //      current width; taller than one text line means the caption wrapped;
+  //   2. the rows must fit without a scrollbar (g_contentH <= client height).
+  //
+  // If either fails the window is grown and the layout re-run, up to a few times. This
+  // only runs while the window is FLOATING: when docked REAPER owns the size and the
+  // panel scrolls instead.
+  for (int attempt = 0; attempt < 10; ++attempt)
+  {
+    LayoutControls(h);
+
+    RECT rc;
+    GetClientRect(h, &rc);
+
+    // How tall does the check box want to be at this width? Its own answer, so the
+    // wrap point is measured rather than estimated.
+    int boxWanted = 0;
+    if (g_chkGlide)
+    {
+      // DT_CALCRECT on the button's own DC gives the wrapped height for its width.
+      RECT br = {0, 0, rc.right - m.pad * 2, 0};
+      HDC dc = GetDC(g_chkGlide);
+      HGDIOBJ oldFont = SelectObject(dc, UiFont(nullptr));
+      char text[256] = {0};
+      GetWindowTextA(g_chkGlide, text, sizeof(text));
+      DrawTextA(dc, text, -1, &br, DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
+      SelectObject(dc, oldFont);
+      ReleaseDC(g_chkGlide, dc);
+      boxWanted = br.bottom;
+    }
+
+    const bool wrapped = (boxWanted > m.fontH + 2);
+    const bool tooShort = (g_contentH > rc.bottom);
+    if (!wrapped && !tooShort)
+      return; // fits, no scrollbar: done
+
+    // Grow along whichever axis failed (and always keep the current width if the wrap
+    // was the only problem, since a wider window fixes the wrap).
+    int newW = rc.right;
+    if (wrapped)
+      newW = (rc.right < MinPanelWidth(m)) ? MinPanelWidth(m) : rc.right + m.fontH * 4;
+    const int newH = (tooShort ? g_contentH : rc.bottom);
+
+    RECT wr = {0, 0, newW, newH};
+    AdjustWindowRectEx(&wr, WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU, FALSE,
+                       WS_EX_TOOLWINDOW);
+    SetWindowPos(h, nullptr, 0, 0, wr.right - wr.left, wr.bottom - wr.top,
+                 SWP_NOMOVE | SWP_NOZORDER);
+  }
+}
+
+static void LayoutControls(HWND h)
+{
+  if (!h || !g_chkGlide)
+    return;
+  PanelMetrics m = PanelMetricsNow();
+  RECT rc;
+  GetClientRect(h, &rc);
+  const int w = rc.right;
+  const int cw = w - m.pad * 2;
+
+  // Vertical: the rows keep their compact spacing and start at the top. The panel is
+  // NOT stretched to fill a taller window (the groups would drift apart and lose their
+  // grouping), so extra height is simply left empty at the bottom.
+  //
+  // When the window is too SHORT, the content is NOT squeezed -- it scrolls (see the
+  // scrollbar handling below). Squeezing was the earlier behaviour and it had a floor;
+  // scrolling has none, which is what makes adding more parameters later safe.
+  const int avail = rc.bottom - rc.top;
+  g_contentH = PanelIdealHeight(m);
+
+  // Scrollbar first: its presence changes the usable width, so it must be decided
+  // before the controls are placed. Shown only while the content does not fit.
+  const int barW = GetSystemMetrics(SM_CXVSCROLL);
+  const bool needScroll = (g_contentH > avail);
+  if (needScroll)
+  {
+    const int maxY = g_contentH - avail;
+    if (g_scrollY > maxY) g_scrollY = maxY;
+    if (g_scrollY < 0) g_scrollY = 0;
   }
   else
   {
-    SetTextColor(hdc, g_theme.text);
-    SetBkColor(hdc, g_theme.bg);
+    g_scrollY = 0;
   }
-  return (LRESULT)g_theme.bgBrush;
+  ShowScrollBar(h, SB_VERT, needScroll);
+  // A scrollbar that appears only AFTER the window theme was set (the panel is made
+  // short, or REAPER docks it into a cramped slot) would otherwise be created with the
+  // default light theme. Re-applying the window theme when the scrollbar comes and goes
+  // keeps it dark whenever the panel is -- and costs nothing when nothing changed.
+  if (needScroll != g_barThemed)
+  {
+    ApplyWindowTheme(h, g_theme.dark);
+    g_barThemed = needScroll;
+  }
+  if (needScroll)
+  {
+    SCROLLINFO si = {0};
+    si.cbSize = sizeof(si);
+    si.fMask = SIF_RANGE | SIF_PAGE | SIF_POS;
+    si.nMin = 0;
+    si.nMax = g_contentH - 1;
+    si.nPage = avail;
+    si.nPos = g_scrollY;
+    SetScrollInfo(h, SB_VERT, &si, TRUE);
+  }
+  const int usableW = needScroll ? (w - barW) : w;
+  const int y0 = -g_scrollY; // content coordinate 0 sits here
+
+  SetWindowPos(g_chkGlide, nullptr, m.pad, y0 + m.pad, usableW - m.pad * 2, m.headH,
+               SWP_NOZORDER);
+
+  for (int i = 0; i < kNumSliders; ++i)
+  {
+    const SliderSpec &s = g_sliders[i];
+    const int ly = y0 + m.pad + m.headH + m.rowH * i;
+
+    // Card = content + equal padding top and bottom.
+    RECT cr = {m.pad, ly, usableW - m.pad, ly + m.cardPad + m.groupH + m.barH + m.cardPad};
+    g_cardRect[i] = cr;
+
+    const int ix = cr.left + m.cardPad;
+    const int iw = (cr.right - m.cardPad) - ix;
+    const int ty = cr.top + m.cardPad;
+
+    SetWindowPos(GetDlgItem(h, s.labelId), nullptr, ix, ty, iw, m.groupH - 2, SWP_NOZORDER);
+    SetWindowPos(g_capLo[i], nullptr, ix, ty + m.groupH, m.capW, m.barH, SWP_NOZORDER);
+    SetWindowPos(g_capHi[i], nullptr, ix + iw - m.capW, ty + m.groupH, m.capW, m.barH,
+                 SWP_NOZORDER);
+    SetWindowPos(GetDlgItem(h, s.sliderId), nullptr, ix + m.capW + 8, ty + m.groupH,
+                 iw - (m.capW + 8) * 2, m.barH, SWP_NOZORDER);
+  }
+
+
+  // The block's outer rect (the single frame) and the rule under the master switch.
+  if (kNumSliders > 0)
+    g_groupRect = {g_cardRect[0].left, g_cardRect[0].top,
+                   g_cardRect[kNumSliders - 1].right, g_cardRect[kNumSliders - 1].bottom};
+  // The rule under the master switch scrolls with the content (y0).
+  g_sepRect = {m.pad, y0 + m.pad + m.headH + 2, usableW - m.pad,
+               y0 + m.pad + m.headH + 3};
+  g_hasCards = true;
+
+  // The faders paint their own background from the card colour, so they must repaint
+  // when the layout moves them.
+  for (int i = 0; i < kNumSliders; ++i)
+    if (HWND f = GetDlgItem(h, g_sliders[i].sliderId))
+      InvalidateRect(f, nullptr, TRUE);
+}
+
+// Create the child controls once. LayoutControls() then places them.
+static void CreatePanelChildren(HWND h)
+{
+  const PanelMetrics m = PanelMetricsNow();
+
+  g_chkGlide = CreateWindowExA(0, "BUTTON",
+                               "Enable smooth scrolling   (off = REAPER's native wheel)",
+                               WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+                               0, 0, 10, 10, h, (HMENU)(INT_PTR)IDC_CHK_GLIDE,
+                               g_hInst, nullptr);
+  SendMessage(g_chkGlide, BM_SETCHECK, g_glideOn ? BST_CHECKED : BST_UNCHECKED, 0);
+
+  for (int i = 0; i < kNumSliders; ++i)
+  {
+    const SliderSpec &s = g_sliders[i];
+    CreateWindowExA(0, "STATIC", "", WS_CHILD | WS_VISIBLE | SS_LEFT, 0, 0, 10, 10, h,
+                    (HMENU)(INT_PTR)s.labelId, g_hInst, nullptr);
+    g_capLo[i] = CreateWindowExA(0, "STATIC", s.lomark,
+                                 WS_CHILD | WS_VISIBLE | SS_LEFT | SS_CENTERIMAGE,
+                                 0, 0, 10, 10, h, nullptr, g_hInst, nullptr);
+    g_capHi[i] = CreateWindowExA(0, "STATIC", s.himark,
+                                 WS_CHILD | WS_VISIBLE | SS_RIGHT | SS_CENTERIMAGE,
+                                 0, 0, 10, 10, h, nullptr, g_hInst, nullptr);
+    HWND f = CreateWindowExA(0, SWSC_FADER_CLASS, "", WS_CHILD | WS_VISIBLE, 0, 0, 10, 10,
+                             h, (HMENU)(INT_PTR)s.sliderId, g_hInst, nullptr);
+    SetWindowLongPtrA(f, GWLP_USERDATA, (LONG_PTR)i);
+  }
+
+
+  (void)m;
+  ApplyFontToChildren(h);
+}
+
+// Give the window a dark title bar when the panel is in dark mode. Windows does not
+// follow the theme by itself for a window an application creates, so the caption stays
+// light without this.
+//
+// DwmSetWindowAttribute lives in dwmapi.dll, which is loaded on demand rather than
+// linked: the attribute number differs between Windows builds (20 on Windows 10 2004
+// and later, 19 before that), and both are tried. If neither is supported the call
+// simply does nothing and the caption keeps the system colour -- cosmetic only.
+#define SWSC_DWMWA_USE_IMMERSIVE_DARK_MODE_OLD 19
+#define SWSC_DWMWA_USE_IMMERSIVE_DARK_MODE 20
+
+static void ApplyDarkTitleBar(HWND h, bool dark)
+{
+  typedef HRESULT(WINAPI * DwmSetWindowAttribute_t)(HWND, DWORD, LPCVOID, DWORD);
+  static DwmSetWindowAttribute_t fn = nullptr;
+  static bool tried = false;
+  if (!tried)
+  {
+    tried = true;
+    HMODULE dwm = LoadLibraryA("dwmapi.dll");
+    if (dwm)
+      fn = (DwmSetWindowAttribute_t)GetProcAddress(dwm, "DwmSetWindowAttribute");
+  }
+  if (!fn)
+    return;
+  const BOOL v = dark ? TRUE : FALSE;
+  if (FAILED(fn(h, SWSC_DWMWA_USE_IMMERSIVE_DARK_MODE, &v, sizeof(v))))
+    fn(h, SWSC_DWMWA_USE_IMMERSIVE_DARK_MODE_OLD, &v, sizeof(v));
+}
+
+// The window's own scrollbar is drawn by the window THEME, not by our painting, so it
+// ignores the panel's colours and stays light inside a dark panel. Windows ships an
+// (undocumented but stable since 1809) "DarkMode_Explorer" theme that renders the
+// standard scrollbar and controls dark; applying it to the window is the supported way
+// to get a dark scrollbar without owning the drawing. Light mode passes nullptr, which
+// restores the default theme -- so this is a two-way switch, not a one-way darkening.
+static void ApplyWindowTheme(HWND h, bool dark)
+{
+  typedef HRESULT(WINAPI * SetWindowTheme_t)(HWND, LPCWSTR, LPCWSTR);
+  static SetWindowTheme_t fn = nullptr;
+  static bool tried = false;
+  if (!tried)
+  {
+    tried = true;
+    HMODULE ux = LoadLibraryA("uxtheme.dll");
+    if (ux)
+      fn = (SetWindowTheme_t)GetProcAddress(ux, "SetWindowTheme");
+  }
+  if (!fn)
+    return;
+  fn(h, dark ? L"DarkMode_Explorer" : nullptr, nullptr);
+  // A window's own WS_VSCROLL bar lives in its non-client area, so switching the theme
+  // only takes effect once the frame is redrawn; invalidating the client area alone
+  // leaves the scrollbar in the previous mode.
+  RedrawWindow(h, nullptr, nullptr, RDW_FRAME | RDW_INVALIDATE);
+}
+
+// Switch the settings window between REAPER's docker and a normal floating window.
+//
+// This is done by tearing the window down and building it again from ShowConfigWindow
+// with g_dockOn flipped, which is exactly how SWS's dockable windows toggle: a window's
+// dock membership is fixed for its lifetime, so the only reliable way to move it in or
+// out is a fresh window. The preference is saved, so the next open comes up the same way
+// and the choice survives a restart.
+static void ToggleDocking(HWND h)
+{
+  bool isFloatingDocker = false;
+  const bool docked = (DockIsChildOfDock && DockIsChildOfDock(h, &isFloatingDocker) >= 0);
+  g_dockOn = !docked;
+  SaveSettings();
+  // DestroyWindow raises WM_CLOSE only for a user's close, so remove explicitly here:
+  // the window is going away because its dock state changed, not because it was closed.
+  if (docked && DockWindowRemove)
+    DockWindowRemove(h);
+  DestroyWindow(h);   // clears g_cfgWnd in WM_DESTROY
+  ShowConfigWindow(); // recreated with the new g_dockOn
 }
 
 static LRESULT CALLBACK CfgProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
 {
   switch (msg)
   {
-  case WM_HSCROLL:
+  case SWSC_FADER_RESET:
   {
-    if (g_cfgUpdating)
-      break;
-    HWND from = (HWND)lp;
+    // Double click on a fader: put THAT parameter back to its compiled-in default.
+    // A targeted reset, not "restore everything", which is what REAPER's own controls
+    // do and keeps the gesture safe to use while tuning.
     for (int i = 0; i < kNumSliders; ++i)
     {
       const SliderSpec &s = g_sliders[i];
-      if (GetDlgItem(h, s.sliderId) == from)
+      if (s.sliderId != (int)wp)
+        continue;
+      static const double kDefaultPerSlider[kNumSliders] = {
+          kDefaultStartPct, kDefaultAccelPct, kDefaultReleaseMs, kDefaultHold, kDefaultCoast};
+      *s.value = kDefaultPerSlider[i];
+      RefreshDerived();
+      g_faderPos[i] = ValueToSlider(s, *s.value);
+      if (HWND f = GetDlgItem(h, s.sliderId))
+        InvalidateRect(f, nullptr, FALSE);
+      UpdateLabels();
+      SaveSettings();
+      break;
+    }
+    return 0;
+  }
+  case SWSC_FADER_CHANGED:
+  {
+    // A fader moved. Ignore notifications raised while the window is being built.
+    if (g_cfgUpdating)
+      return 0;
+    const int cid = (int)wp;
+    for (int i = 0; i < kNumSliders; ++i)
+    {
+      const SliderSpec &s = g_sliders[i];
+      if (s.sliderId == cid)
       {
-        const int pos = (int)SendMessage(from, TBM_GETPOS, 0, 0);
-        *s.value = SliderToValue(s, pos);
+        *s.value = SliderToValue(s, (int)lp);
         RefreshDerived();      // clamp into range
         UpdateLabels();
         SaveSettings();        // persist live, so closing the window keeps the value
@@ -1860,23 +2711,15 @@ static LRESULT CALLBACK CfgProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
       }
       return 0;
     }
-    case IDC_B_RESET:
-      ResetSettings();
-      PushValuesToSliders();
-      SendDlgItemMessageA(h, IDC_CHK_GLIDE, BM_SETCHECK,
-                          g_glideOn ? BST_CHECKED : BST_UNCHECKED, 0);
-      SaveSettings();
-      return 0;
-    case IDC_B_CLOSE:
-      DestroyWindow(h);
-      return 0;
     }
     break;
   case WM_CTLCOLORSTATIC:
-  case WM_CTLCOLORBTN:
   case WM_CTLCOLOREDIT:
   case WM_CTLCOLORLISTBOX:
-    return OnCtlColor(msg, (HDC)wp);
+    return OnCtlColor(msg, (HDC)wp, (HWND)lp);
+  // WM_CTLCOLORBTN is deliberately NOT handled: returning a brush there turns off
+  // visual styles for the button, so the check box would render in the old flat style
+  // and look less like the rest of the application, not more.
   case WM_ERASEBKGND:
   {
     RECT rc;
@@ -1884,11 +2727,159 @@ static LRESULT CALLBACK CfgProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     FillRect((HDC)wp, &rc, g_theme.bgBrush);
     return 1;
   }
+  case WM_PAINT:
+    PaintPanel(h);
+    return 0;
+  case WM_SIZE:
+    // REAPER resizes the window when it is docked, undocked, or when the dock is
+    // resized, so the layout has to follow the size rather than assume the one it was
+    // created at.
+    LayoutControls(h);
+    InvalidateRect(h, nullptr, TRUE);
+    if (g_rectTracking)
+      CaptureFloatGeom(h);
+    return 0;
+  case WM_MOVE:
+    if (g_rectTracking)
+      CaptureFloatGeom(h);
+    return 0;
+  case WM_EXITSIZEMOVE:
+    // One save per completed drag/resize instead of one per intermediate message, so
+    // dragging the panel does not hammer the state store.
+    if (g_rectTracking)
+    {
+      CaptureFloatGeom(h);
+      SaveSettings();
+    }
+    return 0;
+  case WM_VSCROLL:
+  {
+    // Only meaningful while the content does not fit; LayoutControls decides whether
+    // the bar is shown at all and clamps the offset, so the arithmetic here is simple.
+    RECT rc;
+    GetClientRect(h, &rc);
+    const int maxY = (g_contentH > rc.bottom) ? (g_contentH - rc.bottom) : 0;
+    int y = g_scrollY;
+    switch (LOWORD(wp))
+    {
+    case SB_LINEUP:   y -= g_scrollStep; break;
+    case SB_LINEDOWN: y += g_scrollStep; break;
+    case SB_PAGEUP:   y -= rc.bottom; break;
+    case SB_PAGEDOWN: y += rc.bottom; break;
+    case SB_TOP:      y = 0; break;
+    case SB_BOTTOM:   y = maxY; break;
+    case SB_THUMBTRACK:
+    case SB_THUMBPOSITION:
+    {
+      SCROLLINFO si = {0};
+      si.cbSize = sizeof(si);
+      si.fMask = SIF_TRACKPOS;
+      GetScrollInfo(h, SB_VERT, &si);
+      y = si.nTrackPos;
+      break;
+    }
+    default:
+      return 0;
+    }
+    if (y < 0) y = 0;
+    if (y > maxY) y = maxY;
+    if (y != g_scrollY)
+    {
+      g_scrollY = y;
+      LayoutControls(h);
+      InvalidateRect(h, nullptr, TRUE);
+    }
+    return 0;
+  }
+  case WM_MOUSEWHEEL:
+  {
+    // The panel is short enough for a wheel to scroll it, which is what a user will
+    // reach for before the scrollbar.
+    if (g_contentH <= 0)
+      return 0;
+    RECT rc;
+    GetClientRect(h, &rc);
+    const int maxY = (g_contentH > rc.bottom) ? (g_contentH - rc.bottom) : 0;
+    if (maxY <= 0)
+      return 0; // everything fits: let it pass, nothing to scroll
+    const int delta = ((short)HIWORD(wp));
+    int y = g_scrollY + (delta < 0 ? g_scrollStep : -g_scrollStep);
+    if (y < 0) y = 0;
+    if (y > maxY) y = maxY;
+    if (y != g_scrollY)
+    {
+      g_scrollY = y;
+      LayoutControls(h);
+      InvalidateRect(h, nullptr, TRUE);
+    }
+    return 0;
+  }
+  case WM_GETMINMAXINFO:
+  {
+    // Keep a floor on the size so docking cannot squeeze the controls into nothing.
+    // Width floor: below MinPanelWidth the master switch's caption would wrap, which is
+    // the one line that must stay on one line. Height floor is small on purpose -- the
+    // panel scrolls, so it does not need room for every row at once.
+    MINMAXINFO *mmi = (MINMAXINFO *)lp;
+    MinWindowSize(PanelMetricsNow(), &mmi->ptMinTrackSize.x, &mmi->ptMinTrackSize.y);
+    return 0;
+  }
+  case WM_CONTEXTMENU:
+  {
+    // Dockable windows in REAPER are toggled from a right-click menu on the window, so
+    // the panel gets one too. Without it there is no way to leave the docker once
+    // docked: REAPER remembers the placement and the docker's own tab menu only picks
+    // a different edge, so "Dock / Undock" is what makes the choice reversible.
+    const bool docked = WindowInDock(h);
+    HMENU hm = CreatePopupMenu();
+    AppendMenuA(hm, MF_STRING, 1, docked ? "Undock" : "Dock in Docker");
+    const int cmd = TrackPopupMenu(hm, TPM_RETURNCMD | TPM_RIGHTBUTTON, GET_X_LPARAM(lp),
+                                   GET_Y_LPARAM(lp), 0, h, nullptr);
+    DestroyMenu(hm);
+    if (cmd == 1)
+      ToggleDocking(h);
+    return 0;
+  }
   case WM_CLOSE:
+    // Remember where the floating panel was before it goes away, so reopening it puts it
+    // back in the same place instead of the OS default position. Saved here rather than
+    // only on drag-end because the panel may be closed right after a move, and because
+    // this is the last moment the window still has a valid rectangle.
+    CaptureFloatGeom(h);
+    SaveSettings();
+    g_rectTracking = false;
+    // Leave the docker before the window is destroyed, while the window is still alive
+    // and REAPER is not mid-teardown. Removing from inside WM_DESTROY instead would run
+    // while the docker is already tearing the entry down and could leave a stale entry
+    // for our ident string -- after which REAPER still believes the window is placed, so
+    // a later instance is not shown and the docker keeps claiming the window.
+    if (DockWindowRemove)
+      DockWindowRemove(h);
     DestroyWindow(h);
     return 0;
   case WM_DESTROY:
+    // Nothing to tell REAPER here: the dock was already left in WM_CLOSE.
     g_cfgWnd = nullptr;
+    g_hasCards = false;
+    g_chkGlide = nullptr;
+    g_barThemed = false;
+    g_rectTracking = false;
+    return 0;
+  case WM_THEMECHANGED:
+  case WM_SYSCOLORCHANGE:
+    // The theme (or the system colours) changed under us: re-read it, rebuild the
+    // brushes so nothing keeps painting the old colours, and flip the window theme so
+    // the scrollbar follows the panel into the new mode. Child statics are invalidated
+    // too, because their background comes from the brush we just replaced.
+    ResolveTheme();
+    RebuildThemeBrushes();
+    ApplyWindowTheme(h, g_theme.dark);
+    InvalidateRect(h, nullptr, TRUE);
+    // Child statics draw their background with the brush we just replaced, so they must
+    // repaint too or they keep the old theme's colour.
+    for (HWND c = FindWindowExA(h, nullptr, nullptr, nullptr); c;
+         c = FindWindowExA(h, c, nullptr, nullptr))
+      InvalidateRect(c, nullptr, TRUE);
     return 0;
   }
   return DefWindowProcA(h, msg, wp, lp);
@@ -1897,29 +2888,147 @@ static LRESULT CALLBACK CfgProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
 static void BuildSliderSpecs()
 {
   g_sliders[0] = {IDC_S_START, IDC_L_START, "Start", &g_startPct,
-                  kStartMinPct, kStartMaxPct, "%", "slower", "faster"};
+                  kStartMinPct, kStartMaxPct, "%", "Slower", "Faster"};
   g_sliders[1] = {IDC_S_ACCEL, IDC_L_ACCEL, "Accel per notch", &g_accelPct,
-                  kAccelMinPct, kAccelMaxPct, "%", "gentler", "stronger"};
+                  kAccelMinPct, kAccelMaxPct, "%", "Gentler", "Stronger"};
   g_sliders[2] = {IDC_S_RELEASE, IDC_L_RELEASE, "Release", &g_releaseMs,
-                  kReleaseMinMs, kReleaseMaxMs, "ms", "quicker", "longer"};
+                  kReleaseMinMs, kReleaseMaxMs, "ms", "Quicker", "Longer"};
   g_sliders[3] = {IDC_S_HOLD, IDC_L_HOLD, "High-speed hold", &g_hold,
-                  kHoldMin, kHoldMax, "x", "less", "more"};
+                  kHoldMin, kHoldMax, "x", "Less", "More"};
   g_sliders[4] = {IDC_S_COAST, IDC_L_COAST, "High-speed coast", &g_coast,
-                  kCoastMin, kCoastMax, "x", "less", "more"};
+                  kCoastMin, kCoastMax, "x", "Less", "More"};
+}
+
+// --- Window placement --------------------------------------------------------
+//
+// Whether the window is in a docker has to be asked of REAPER rather than inferred from
+// its style, and the question comes up in several places (show, toggle, geometry), so it
+// is asked in one place.
+static bool WindowInDock(HWND h)
+{
+  return h && DockIsChildOfDock && DockIsChildOfDock(h, nullptr) >= 0;
+}
+
+// The window's minimum track size -- the same numbers WM_GETMINMAXINFO answers with, kept
+// in one place so a remembered geometry cannot be restored smaller than the layout allows.
+// LONG out-params because that is what MINMAXINFO's track sizes are.
+static void MinWindowSize(const PanelMetrics &m, LONG *outW, LONG *outH)
+{
+  RECT r = {0, 0, MinPanelWidth(m), m.pad * 2 + m.headH + m.rowH};
+  AdjustWindowRectEx(&r, WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU, FALSE, WS_EX_TOOLWINDOW);
+  if (outW) *outW = r.right - r.left;
+  if (outH) *outH = r.bottom - r.top;
+}
+
+// Pull a remembered rectangle back onto a monitor that exists. A saved position can end
+// up off-screen after the display layout changes, and a window restored there would be
+// invisible. Only the position is moved; the size is kept.
+static void EnsureOnScreen(RECT &r)
+{
+  HMONITOR mon = MonitorFromRect(&r, MONITOR_DEFAULTTONEAREST);
+  MONITORINFO mi = {0};
+  mi.cbSize = sizeof(mi);
+  if (!mon || !GetMonitorInfoA(mon, &mi))
+    return;
+  const RECT wa = mi.rcWork;
+  const int w = r.right - r.left;
+  const int h = r.bottom - r.top;
+  const int maxX = (wa.right - w > wa.left) ? (wa.right - w) : wa.left;
+  const int maxY = (wa.bottom - h > wa.top) ? (wa.bottom - h) : wa.top;
+  r.left = (r.left < wa.left) ? wa.left : ((r.left > maxX) ? maxX : r.left);
+  r.top = (r.top < wa.top) ? wa.top : ((r.top > maxY) ? maxY : r.top);
+  r.right = r.left + w;
+  r.bottom = r.top + h;
+}
+
+// First-run placement: centred on REAPER's main window (slightly above centre, leaving
+// room below), the way REAPER places its own dialogs. Only used when no geometry has been
+// remembered yet -- after that the user's own placement wins.
+static void PlaceCenteredOnMain(HWND h)
+{
+  if (!g_main || !IsWindow(g_main))
+    return;
+  RECT w, m;
+  if (!GetWindowRect(h, &w) || !GetWindowRect(g_main, &m))
+    return;
+  const int ww = w.right - w.left;
+  const int wh = w.bottom - w.top;
+  RECT r;
+  r.left = m.left + ((m.right - m.left) - ww) / 2;
+  r.top = m.top + ((m.bottom - m.top) - wh) / 3;
+  r.right = r.left + ww;
+  r.bottom = r.top + wh;
+  EnsureOnScreen(r);
+  SetWindowPos(h, nullptr, r.left, r.top, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
+// Remember where a floating window currently is. Docked geometry is skipped: REAPER owns
+// that and keeps it itself.
+static void CaptureFloatGeom(HWND h)
+{
+  if (!h || WindowInDock(h))
+    return;
+  RECT r;
+  if (GetWindowRect(h, &r))
+  {
+    g_floatRect = r;
+    g_floatRectValid = true;
+  }
+}
+
+// The action bound to a key opens the panel the first time and closes it the second, so
+// one shortcut (or one menu click) both shows and hides it.
+//
+// "Is it currently showing?" is not just IsWindowVisible: a window docked into a
+// COLLAPSED docker is hidden by REAPER while still being the panel the user asked for.
+// Treating that as "not showing" would make the first press appear to do nothing and the
+// second open a second window, so a docked window counts as showing regardless.
+static void ToggleConfigWindow()
+{
+  bool showing = false;
+  if (g_cfgWnd && IsWindow(g_cfgWnd))
+    showing = WindowInDock(g_cfgWnd) || IsWindowVisible(g_cfgWnd);
+  if (showing)
+    SendMessageA(g_cfgWnd, WM_CLOSE, 0, 0);
+  else
+    ShowConfigWindow();
 }
 
 static void ShowConfigWindow()
 {
   if (g_cfgWnd && IsWindow(g_cfgWnd))
   {
+    // The window exists but may not be on screen. REAPER's docker HIDES a docked child
+    // instead of destroying it when the docker is collapsed, so "exists" is not the
+    // same as "visible"; without the branches below the command would foreground a
+    // hidden window and appear to do nothing. Order: docked -> activate in the docker;
+    // hidden -> show; otherwise -> raise.
+    ApplyDarkTitleBar(g_cfgWnd, g_theme.dark);
+    bool isFloatingDocker = false;
+    if (DockIsChildOfDock && DockIsChildOfDock(g_cfgWnd, &isFloatingDocker) >= 0)
+    {
+      if (DockWindowActivate)
+        DockWindowActivate(g_cfgWnd);
+      return;
+    }
+    // Not in the docker. REAPER's docker can drop the window back to top-level when its
+    // tab is closed, so record that: the next open should come up floating too rather
+    // than trying to rejoin the docker.
+    if (g_dockOn)
+    {
+      g_dockOn = false;
+      SaveSettings();
+    }
+    if (!IsWindowVisible(g_cfgWnd))
+      ShowWindow(g_cfgWnd, SW_SHOW);
     SetForegroundWindow(g_cfgWnd);
     return;
   }
   BuildSliderSpecs();
+  RegisterFaderClass();
   ResolveTheme();
-  // While the controls are being created and filled in they raise notifications; a
-  // guard keeps those from being mistaken for user edits (they must not save, and the
-  // slider handler must not treat a programmatic position as a new value).
+  // While the controls are created and filled in they raise notifications; the guard
+  // keeps those from being mistaken for user edits.
   g_cfgUpdating = true;
 
   const char *cls = "SmoothWheelScrollCfg";
@@ -1930,76 +3039,87 @@ static void ShowConfigWindow()
     wc.lpfnWndProc = CfgProc;
     wc.hInstance = g_hInst;
     wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
-    wc.hbrBackground = nullptr; // painted in WM_ERASEBKGND with the theme brush
+    wc.hbrBackground = nullptr; // painted in WM_PAINT with the theme brushes
     wc.lpszClassName = cls;
     RegisterClassA(&wc);
     registered = true;
   }
 
-  const int margin = 18, labelH = 18, sliderH = 30, rowH = 62, width = 460;
-  const int y0 = 14;
-  const int rows = kNumSliders;
-  const int headH = 34; // the on/off switch
-  const int footY = y0 + headH + rowH * rows + 6;
+  RebuildThemeBrushes();
 
-  if (g_theme.bgBrush)
-    DeleteObject(g_theme.bgBrush);
-  g_theme.bgBrush = CreateSolidBrush(g_theme.bg);
-
-  g_cfgWnd = CreateWindowExA(WS_EX_TOOLWINDOW, cls, "Smooth Wheel Scroll - settings",
-                             WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
-                             CW_USEDEFAULT, CW_USEDEFAULT, width, footY + labelH * 2 + 76,
-                             g_main, nullptr, g_hInst, nullptr);
-  if (!g_cfgWnd)
-    return;
-
-  // Master switch, with an explicit description of what "off" means.
-  HWND chk = CreateWindowExA(0, "BUTTON", "Enable smooth scrolling (off = REAPER's native wheel)",
-                             WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-                             margin, y0, width - margin * 2, 22, g_cfgWnd,
-                             (HMENU)(INT_PTR)IDC_CHK_GLIDE, g_hInst, nullptr);
-  SendMessage(chk, BM_SETCHECK, g_glideOn ? BST_CHECKED : BST_UNCHECKED, 0);
-
-  for (int i = 0; i < kNumSliders; ++i)
+  const PanelMetrics m = PanelMetricsNow();
+  const DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU;
+  // Size: a remembered floating size wins (the user may have resized the panel), clamped
+  // to at least the minimum; otherwise the compact size where nothing scrolls. The height
+  // is only a starting point -- FitWindowToContent below corrects it against the real
+  // laid-out content.
+  LONG minW = 0, minH = 0;
+  MinWindowSize(m, &minW, &minH);
+  RECT wr = {0, 0, MinPanelWidth(m), PanelIdealHeight(m)};
+  if (g_floatRectValid && !g_dockOn)
   {
-    const SliderSpec &s = g_sliders[i];
-    const int ly = y0 + headH + rowH * i;
-    CreateWindowExA(0, "STATIC", "", WS_CHILD | WS_VISIBLE | SS_LEFT,
-                    margin, ly, width - margin * 2, labelH, g_cfgWnd,
-                    (HMENU)(INT_PTR)s.labelId, g_hInst, nullptr);
-    HWND sl = CreateWindowExA(0, TRACKBAR_CLASSA, "",
-                              WS_CHILD | WS_VISIBLE | TBS_HORZ | TBS_NOTICKS,
-                              margin, ly + labelH, width - margin * 2, sliderH,
-                              g_cfgWnd, (HMENU)(INT_PTR)s.sliderId, g_hInst, nullptr);
-    SendMessage(sl, TBM_SETRANGE, TRUE, MAKELPARAM(0, 1000));
-    SendMessage(sl, TBM_SETPAGESIZE, 0, 25);
-    // End caps, so the direction of each slider is readable at a glance.
-    CreateWindowExA(0, "STATIC", s.lomark, WS_CHILD | WS_VISIBLE | SS_LEFT,
-                    margin, ly + labelH + sliderH - 2, 90, labelH, g_cfgWnd,
-                    nullptr, g_hInst, nullptr);
-    CreateWindowExA(0, "STATIC", s.himark, WS_CHILD | WS_VISIBLE | SS_RIGHT,
-                    width - margin - 90, ly + labelH + sliderH - 2, 90, labelH, g_cfgWnd,
-                    nullptr, g_hInst, nullptr);
+    wr.right = (g_floatRect.right - g_floatRect.left > minW)
+                   ? (g_floatRect.right - g_floatRect.left) : minW;
+    wr.bottom = (g_floatRect.bottom - g_floatRect.top > minH)
+                    ? (g_floatRect.bottom - g_floatRect.top) : minH;
+  }
+  // CreateWindowEx takes the size of the WHOLE window, so the caption and border are
+  // added to the client size here; otherwise the bottom padding is eaten by the frame.
+  AdjustWindowRectEx(&wr, style, FALSE, WS_EX_TOOLWINDOW);
+
+  g_cfgWnd = CreateWindowExA(WS_EX_TOOLWINDOW, cls, "Smooth Wheel Scroll", style,
+                             CW_USEDEFAULT, CW_USEDEFAULT, wr.right - wr.left,
+                             wr.bottom - wr.top, g_main, nullptr, g_hInst, nullptr);
+  if (!g_cfgWnd)
+  {
+    g_cfgUpdating = false;
+    return;
   }
 
-  CreateWindowExA(0, "STATIC", "", WS_CHILD | WS_VISIBLE | SS_LEFT,
-                  margin, footY, width - margin * 2, labelH * 3, g_cfgWnd,
-                  (HMENU)(INT_PTR)IDC_L_HINT, g_hInst, nullptr);
-
-  const int btnY = footY + labelH * 3 + 6;
-  CreateWindowExA(0, "BUTTON", "Reset to defaults", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                  margin, btnY, 150, 28, g_cfgWnd, (HMENU)(INT_PTR)IDC_B_RESET, g_hInst, nullptr);
-  CreateWindowExA(0, "BUTTON", "Close", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON,
-                  margin + 160, btnY, 90, 28, g_cfgWnd, (HMENU)(INT_PTR)IDC_B_CLOSE, g_hInst, nullptr);
-  CreateWindowExA(0, "STATIC", "Settings are saved automatically.",
-                  WS_CHILD | WS_VISIBLE | SS_LEFT,
-                  margin + 262, btnY + 6, width - margin * 2 - 262, labelH, g_cfgWnd,
-                  (HMENU)(INT_PTR)IDC_L_ABOUT, g_hInst, nullptr);
+  CreatePanelChildren(g_cfgWnd);
+  LayoutControls(g_cfgWnd);
+  // Now that the controls exist, let them tell us the real size they need: the panel
+  // opens at exactly the size where nothing scrolls. Only when it will float -- when it
+  // is going into the docker, REAPER owns the size and the panel scrolls instead.
+  if (!g_dockOn)
+    FitWindowToContent(g_cfgWnd);
+  ApplyDarkTitleBar(g_cfgWnd, g_theme.dark);
+  ApplyWindowTheme(g_cfgWnd, g_theme.dark);
 
   PushValuesToSliders();
-  g_cfgUpdating = false; // the window is built; notifications are user edits now
-  ShowWindow(g_cfgWnd, SW_SHOW);
-  SetForegroundWindow(g_cfgWnd);
+  g_cfgUpdating = false; // built: notifications are user edits now
+
+  // DOCKED: REAPER places the window -- DockWindowAddEx restores the dock from the
+  // placement it keeps in its own configuration, so the plugin passes no geometry at all.
+  //
+  // FLOATING: the plugin places it. The remembered position is restored if there is one;
+  // otherwise it opens centred on REAPER's main window rather than at the OS default
+  // position, which is what made it appear in the top-left corner every time.
+  if (g_dockOn && DockWindowAddEx)
+  {
+    DockWindowAddEx(g_cfgWnd, "Smooth Wheel Scroll", "SmoothWheelScroll_Settings", true);
+    if (DockWindowActivate)
+      DockWindowActivate(g_cfgWnd);
+  }
+  else
+  {
+    if (g_floatRectValid)
+    {
+      RECT r = g_floatRect;
+      EnsureOnScreen(r); // a remembered spot can be off-screen after a display change
+      SetWindowPos(g_cfgWnd, nullptr, r.left, r.top, 0, 0,
+                   SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+    else
+    {
+      PlaceCenteredOnMain(g_cfgWnd);
+    }
+    ShowWindow(g_cfgWnd, SW_SHOW);
+    SetForegroundWindow(g_cfgWnd);
+    // Only now start following the geometry, so the creation and placement above do not
+    // register as user movements.
+    g_rectTracking = true;
+  }
 }
 
 // Extensions menu entry. REAPER calls this for each customizable menu:
@@ -2035,12 +3155,19 @@ static void OnMenuHook(const char *menuidstr, void *menu, int /*flag*/)
   HMENU hm = (HMENU)menu;
   if (MenuHasCommand(hm, g_cmdTune))
     return;
+  // The item is a toggle, so it says what pressing it will do: "close" while the panel
+  // is on screen (visible or docked), "settings..." while it is not.
+  const bool showing =
+      (g_cfgWnd && IsWindow(g_cfgWnd)) &&
+      ((DockIsChildOfDock && DockIsChildOfDock(g_cfgWnd, nullptr) >= 0) ||
+       IsWindowVisible(g_cfgWnd));
   MENUITEMINFOA mi = {0};
   mi.cbSize = sizeof(mi);
   mi.fMask = MIIM_ID | MIIM_STRING | MIIM_STATE;
   mi.wID = (UINT)g_cmdTune;
   mi.fState = MFS_ENABLED;
-  mi.dwTypeData = (LPSTR)"Smooth Wheel Scroll settings...";
+  mi.dwTypeData = (LPSTR)(showing ? "Smooth Wheel Scroll settings (close)"
+                                  : "Smooth Wheel Scroll settings...");
   InsertMenuItemA(hm, GetMenuItemCount(hm), TRUE, &mi);
 }
 #endif // SWS_NO_SETTINGS_UI
@@ -2117,11 +3244,10 @@ extern "C" __declspec(dllexport) int ReaperPluginEntry(HINSTANCE hInst, reaper_p
   if (REAPERAPI_LoadAPI(rec->GetFunc) != 0)
     return 0;
 
-  // Trackbar class, needed only by the tuning window.
-#ifndef SWS_NO_SETTINGS_UI
-  INITCOMMONCONTROLSEX icc = {sizeof(icc), ICC_BAR_CLASSES};
-  InitCommonControlsEx(&icc);
-#endif
+  // The settings window uses no common controls beyond the standard button and
+  // static, so nothing needs registering here (the faders are our own class and are
+  // registered when the window is first built).
+
 
   g_hInst = hInst;
   g_main = rec->hwnd_main ? rec->hwnd_main : GetMainHwnd();

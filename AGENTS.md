@@ -445,3 +445,103 @@ DLL md5 `d293678f254466bd6bc628377477b0ad`。
 
 快照 `versions/1.3.9/`，DLL md5 `186edfee59d1e0d0596eec880cd5b9e5`。
 单格基准仍 **1.89 / 17.94**；默认参数下各档数值与 1.3.8 **逐位相同**。
+
+### 19.1 面板三个回归修复（滚动条暗色 / Dock 可逆 / 关闭后可再开）
+
+用户反馈三条，都是面板生命周期与窗口主题的问题，**与模型无关**（`anim_core.h` 仍与 1.3.0/1.3.8 逐字节相同，
+单格仍 1.89/17.94）。
+
+1. **滚动条不随暗色主题**。窗口自带的 `WS_VSCROLL` 由**窗口主题**绘制，不受我们的画笔控制，
+   所以暗色面板里它仍是亮的。修法：`ApplyWindowTheme()` 用 `SetWindowTheme(h, L"DarkMode_Explorer", nullptr)`
+   （亮色传 `nullptr` 还原，是**双向**开关）。`uxtheme.dll` 走 `LoadLibrary` 动态取，
+   **不加静态导入、不加新的加载硬依赖**。滚动条是**非客户区**，切主题后要
+   `RedrawWindow(RDW_FRAME|RDW_INVALIDATE)` 才会重画；`LayoutControls` 里在
+   滚动条出现/消失时补一次（`g_barThemed` 记忆），`WM_THEMECHANGED`/`WM_SYSCOLORCHANGE` 也重刷
+   （并重建画笔 + 令子控件重绘，否则静态文本还留着旧底色）。
+
+2. **Dock 之后无法恢复普通（浮动）模式**。根因：`ShowConfigWindow` 每次开窗都无条件
+   `DockWindowAddEx(identstr)`，而 REAPER 按 identstr 记忆停靠位置 —— 于是每次打开都被拉回
+   docker，浮动模式不可恢复。修法（**照抄 SWS 的可停靠窗口做法**）：
+   - 新增**持久化偏好 `g_dockOn`**（extstate key `dock`，默认 **false = 浮动**）；
+     **只有 `g_dockOn` 为真才 `DockWindowAddEx`**。
+   - 窗口**右键菜单**给 `Dock in Docker / Undock`。窗口的停靠归属在生存期内固定，
+     所以 `ToggleDocking()` 是**销毁后按新 `g_dockOn` 重建**（与 SWS `ToggleDocking` 同构），
+     并 `SaveSettings()` 存下选择。
+   - 浮动的推子会盖住卡片区，故 `FaderProc` 把 `WM_CONTEXTMENU` **转发给父窗口**，否则右键菜单点不到。
+
+3. **关闭后再也打不开**。两个原因：
+   - 上面第 2 条的无条件 `AddEx` 会把新窗口又塞进（可能已折叠的）docker，看起来像"没反应"；
+   - 旧代码只 `SetForegroundWindow`。而 REAPER 的 docker 在折叠时是**隐藏**子窗口而非销毁，
+     `g_cfgWnd` 仍有效但不可见 → 前台化一个隐藏窗口等于什么都没发生。
+     修法：`ShowConfigWindow` 对已存在的窗口分三路 —— **在 docker 内 → `DockWindowActivate`**；
+     **不可见 → `ShowWindow(SW_SHOW)`**；否则才前台化。若发现窗口已不在 docker 内而 `g_dockOn` 仍为真，
+     就地改回 false 并保存（用户从 docker 里把页签关掉了）。
+
+另外把 `DockWindowRemove` 从 `WM_DESTROY` 移到 **`WM_CLOSE`**（窗口仍存活、REAPER 未在拆 docker 时调用；
+`ToggleDocking` 自己先 remove）。与 `WM_DESTROY` 内回调 docker 相比，不会在拆除过程中留下残缺表项。
+
+**dwmapi / uxtheme 都是动态加载**，缺了只是暗色标题栏/暗色滚动条不生效，不影响其它功能。
+
+这些修改只在设置面板（`#ifndef SWS_NO_SETTINGS_UI`）：默认发布构建含面板，
+`--no-settings-ui` 仍可编出无面板 DLL，两者都已验证可编译。
+
+### 19.2 Accel 上限收到 10%（用户要求）
+
+**用户原话**："Accel 范围控制在 10% 以内就好，这个值太大堆起来有点可怕"。
+
+- 只改 `kAccelMaxPct`：`12.0 → 10.0`。默认仍是 **3.5%**，模型/机制/动作表**全不动**
+  （`anim_core.h` 仍与 1.3.8 逐字节相同，单格 1.89 / 17.94）。
+- 范围是**单一来源**且读入过 `RefreshDerived` → `Clamp`：store 里若残留 >10 的旧值，
+  载入时自动钳到 10，两端仍良定义。
+
+**教训/惯例**：用户给的是**手感上的可接受上限**，不是"把默认拖到边界"——默认值保持中心不变。
+
+### 19.3 设置动作改为开关（可绑快捷键反复开关）
+
+**用户要求**："绑定快捷键或，可以通过快捷键反复开关，而不是只能开"。
+
+- 之前 `g_cmdTune` 只调 `ShowConfigWindow()`，**只能开不能关**。
+- 新增 `ToggleConfigWindow()`：**在屏 → 发 `WM_CLOSE`；不在屏 → `ShowConfigWindow()`**。
+  `OnAction` 的 `g_cmdTune` 分支改调它，所以同一个快捷键/菜单项**再按一次即关闭**。
+- **判定"在屏"不能只看 `IsWindowVisible`**：停靠在**折叠的 docker** 里的窗口被 REAPER 隐藏，
+  但它就是用户要的那个面板。若把它当成"没显示"，第一次按会像没反应、第二次会再开一个窗口。
+  故 **docked 也算在屏**（`DockIsChildOfDock(...) >= 0 || IsWindowVisible(...)`）。
+- Extensions 菜单项文案**随状态变**：开屏显示 `settings (close)`，关屏显示 `settings...`。
+- 关闭 docked 面板走 `WM_CLOSE` → 先 `DockWindowRemove` 再销毁；`g_dockOn` **不变**，
+  所以下次打开仍会回到 docker（关闭≠取消停靠偏好）。
+
+### 19.4 窗口位置遵守 REAPER 的定位规则
+
+**用户原话**："不管是窗口模式还是 Dock 模式，窗口的位置要遵循 REAPER 的定位规则，
+不要自己跑来跑去，或每次都出现在左上角"。
+
+**根因**：浮动窗口用 `CW_USEDEFAULT` 创建 → **每次重建都落到系统默认位置（左上角一带）**；
+加上 19.1 的"销毁后重建"（Undock、关闭再开都走重建），于是"每次都跑回左上角"。
+
+**规则（照 REAPER 的分工）**：
+- **Dock 模式：位置归 REAPER**。`DockWindowAddEx` 恢复 REAPER 记在 `reaper.ini` 的停靠位置，
+  插件**不传几何**。
+- **浮动模式：位置归插件**。extstate key `win` = `"x y w h"`。
+  有记录就还原（含尺寸），**先过 `EnsureOnScreen()`**（显示器布局变了，旧坐标可能已在屏外；
+  这时**只挪位置不改尺寸**）；无记录（首次）就 `PlaceCenteredOnMain()` ——
+  **居中于主窗口**（略偏上），与 REAPER 摆自己对话框的方式一致。
+- 记忆时机：`WM_EXITSIZEMOVE`（拖/缩放结束存一次）+ `WM_CLOSE`（最后能拿到有效矩形时再存一次）；
+  `WM_MOVE`/`WM_SIZE` 只更新内存。`g_rectTracking` 在窗口摆好后**才**打开，
+  免得创建期的临时尺寸被当成用户意图。
+
+**抽出的工具**（都在"Window placement"一节，别再各写一份）：
+`WindowInDock()`、`MinWindowSize()`（与 `WM_GETMINMAXINFO` 共用同一下限）、`CaptureFloatGeom()`。
+
+**性能/体积教训（重要）**：解析 `win` 时用 `sscanf` 会让 mingw 链进整套格式化输入引擎，
+`.text` 从 `0xc3f0` 暴涨到 `0x11ec0`（**+23KB**）。改成**手写 `ParseLong`** 后回到 `0xcab0`。
+**以后凡是"只解析一个整数/浮点"，不要用 `sscanf`**——请手写或用 `strtol`/`strtod`。
+提交前可用 `objdump -h <dll> | grep .text` 对比大小，防止无意拖进大块 libc。
+
+### 19.5 Release 上限收到 300ms（用户要求）
+
+**用户原话**："Rel 上限改到 300ms，其它不变"。
+
+- 只改 `kReleaseMaxMs`：`400.0 → 300.0`。**默认仍 150ms**，其余 4 个参数与全部机制不动
+  （`anim_core.h` 仍与 1.3.8 逐字节相同，单格 1.89 / 17.94）。
+- 同样过单一来源的 `RefreshDerived` → `Clamp`，store 里 >300 的旧值载入即钳回。
+

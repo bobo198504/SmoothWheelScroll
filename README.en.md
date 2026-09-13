@@ -83,16 +83,18 @@ Windows x64, REAPER 7 (built and tested against `7.79`).
    * **Normal install:** `%APPDATA%\REAPER\UserPlugins\`
 3. Restart REAPER.
 
-That is the whole install. There is **no settings dialog and nothing to
-configure** — the plugin runs the tuned defaults and is active immediately.
+The plugin ships a settings panel: **Extensions menu → `Smooth Wheel Scroll
+settings...`** (bindable to a key; press again to close). It holds a master
+smoothing switch and five feel parameters, applied live and saved automatically.
+Nothing needs configuring — the defaults are the tuned ones.
 
 To verify it loaded, check the Extensions list or REAPER's startup log; the plugin
 also appears as `Smooth Wheel Scroll 1.3.9`.
 
 ### Uninstall
 
-Delete the DLL and restart REAPER. No configuration is written anywhere, so nothing
-is left behind.
+Delete the DLL and restart REAPER. Apart from the panel's parameters no
+configuration is written anywhere, so nothing is left behind.
 
 ---
 
@@ -113,8 +115,8 @@ Optional build flags:
 
 | Flag | Effect |
 |---|---|
-| *(none)* | release build; contains the plugin and nothing else |
-| `--tuning-ui` | also compiles the author's tuning window and its Extensions-menu entry |
+| *(none)* | default build, **including** the settings panel |
+| `--no-settings-ui` | compiles the panel out (no panel, no menu entry, no action) |
 | `--debug-log` | compiles diagnostic logging to `%TEMP%\SmoothWheelScroll.log` |
 
 `deploy.sh` refuses to run while REAPER has the DLL loaded, and it reads
@@ -236,8 +238,10 @@ so they do not have to be re-derived.
 * **Plain notched mice only.** Touchpad, touch and high-resolution wheels are left
   to REAPER — they are already fine-grained, and the point of the plugin is to give
   a notched wheel that same refined signal.
-* **No settings UI.** The tuned defaults are compiled in. The author's tuning
-  window is kept in the source behind `--tuning-ui` for future model work.
+* **A settings panel.** Its five parameters (start, accel, release, high-speed hold,
+  high-speed coast) span a range centred on the accepted feel, plus a master switch
+  (off = pass the wheel through untouched). The defaults are the tuned values, and it
+  feels right without touching anything.
 * The plugin does **not** add inertia of its own on top of a driver that already
   provides it; if your device already smooths, you may feel both.
 
