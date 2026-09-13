@@ -3129,6 +3129,13 @@ static void ShowConfigWindow()
 // already initialised by other extensions before we loaded, so flag 0 never
 // arrives here, while flag 1 always does. A presence check avoids duplicating the
 // item when the menu does get initialised by us (or is shown repeatedly).
+//
+// The label shown in that menu. Short on purpose: the Extensions menu is crowded and
+// the full name is long. This is the ONLY place a short form is used -- the action name
+// ("Smooth Wheel Scroll: settings...") keeps its full descriptive text, because that is
+// what a user searches for in the Actions window.
+static const char *kMenuLabel = "SmoothScroll...";
+
 static bool MenuHasCommand(HMENU hm, int cmd)
 {
   const int n = GetMenuItemCount(hm);
@@ -3155,8 +3162,13 @@ static void OnMenuHook(const char *menuidstr, void *menu, int /*flag*/)
   HMENU hm = (HMENU)menu;
   if (MenuHasCommand(hm, g_cmdTune))
     return;
-  // The item is a toggle, so it says what pressing it will do: "close" while the panel
-  // is on screen (visible or docked), "settings..." while it is not.
+  // The Extensions menu is crowded and the full plugin name is long, so the item is
+  // abbreviated here. Only THIS label is short: the action name in the Actions window
+  // keeps the full descriptive text ("Smooth Wheel Scroll: settings..."), which is what
+  // a user searches for -- so nothing that is referenced elsewhere changes.
+  //
+  // It is a toggle, so the current state is marked with a check rather than spelled out
+  // in the label: that keeps the text short and still shows whether the panel is open.
   const bool showing =
       (g_cfgWnd && IsWindow(g_cfgWnd)) &&
       ((DockIsChildOfDock && DockIsChildOfDock(g_cfgWnd, nullptr) >= 0) ||
@@ -3165,9 +3177,8 @@ static void OnMenuHook(const char *menuidstr, void *menu, int /*flag*/)
   mi.cbSize = sizeof(mi);
   mi.fMask = MIIM_ID | MIIM_STRING | MIIM_STATE;
   mi.wID = (UINT)g_cmdTune;
-  mi.fState = MFS_ENABLED;
-  mi.dwTypeData = (LPSTR)(showing ? "Smooth Wheel Scroll settings (close)"
-                                  : "Smooth Wheel Scroll settings...");
+  mi.fState = MFS_ENABLED | (showing ? MFS_CHECKED : 0);
+  mi.dwTypeData = (LPSTR)kMenuLabel;
   InsertMenuItemA(hm, GetMenuItemCount(hm), TRUE, &mi);
 }
 #endif // SWS_NO_SETTINGS_UI

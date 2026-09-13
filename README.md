@@ -67,7 +67,7 @@ Windows x64，REAPER 7（在 `7.79` 上构建与测试）。
 
 插件带一个设置面板，两种方式任选一种打开：
 
-1. **Extensions 菜单** → `Smooth Wheel Scroll settings...`
+1. **Extensions 菜单** → `SmoothScroll...`
 2. **Actions 窗口**里搜 `Smooth Wheel Scroll`，找到 `Smooth Wheel Scroll: settings...`，
    可以给它**绑定快捷键**；同一个键**再按一次就关闭**面板。
 

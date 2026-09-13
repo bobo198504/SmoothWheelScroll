@@ -545,3 +545,16 @@ DLL md5 `d293678f254466bd6bc628377477b0ad`。
   （`anim_core.h` 仍与 1.3.8 逐字节相同，单格 1.89 / 17.94）。
 - 同样过单一来源的 `RefreshDerived` → `Clamp`，store 里 >300 的旧值载入即钳回。
 
+### 19.6 Extensions 菜单项用缩写（用户要求，1.3.9 内修正）
+
+**用户原话**："Extensions 菜单那个 Smooth Wheel Scroll settings.. 名字有点长，采用缩写，
+长度跟 ReaPack 差不多即可。命令里不用变。"
+
+- Extensions 菜单里显示 **`SmoothScroll...`**（`kMenuLabel`，长度与 `ReaPack` 相当）。
+- **动作名（命令）不动**：仍是 `Smooth Wheel Scroll: settings...`。
+  理由：Actions 窗口里靠**完整描述名**搜索，缩短会让人搜不到；且本文件与 README
+  都按这个名字写。所以**只缩菜单标签这一处**。
+- 因为标签不再写"open/close"，**开关状态改用勾选表示**（`MFS_CHECKED`）——文案短了，
+  状态仍然看得见。菜单是**拔插重建**的（菜单收起即销毁，每次展开重进 `OnMenuHook`），
+  所以勾选每次都按实时状态重算。
+

@@ -85,7 +85,7 @@ Windows x64, REAPER 7 (built and tested against `7.79`).
 
 The plugin ships a settings panel. Open it either way:
 
-1. **Extensions menu** → `Smooth Wheel Scroll settings...`
+1. **Extensions menu** → `SmoothScroll...`
 2. In the **Actions** window, search for `Smooth Wheel Scroll` and use
    `Smooth Wheel Scroll: settings...` — you can bind it to a key, and pressing that
    key again closes the panel.

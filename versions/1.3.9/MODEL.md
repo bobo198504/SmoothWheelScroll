@@ -1,7 +1,7 @@
 # SmoothWheelScroll for REAPER 1.3.9
 
 **面向用户的设置面板正式发布**（1.3.6 曾移除设置入口，本版按用户要求做回来）。
-DLL md5 `8bf22fa388b591b420fd192c4750fec4`（含下方 19.1–19.5 修复）。
+DLL md5 `700e0efa283e23b4f541f6ab992252e7`（含下方 19.1–19.6 修复）。
 
 ## 面板
 
@@ -139,6 +139,17 @@ start / accel / release / hold / coast / glide
 - 只改 `kReleaseMaxMs`：`400.0 → 300.0`。**默认仍 150ms**，模型/机制/其它 4 个参数全不动
   （`anim_core.h` 仍与 1.3.8 逐字节相同，单格 1.89 / 17.94）。
 - 同样过 `RefreshDerived` → `Clamp`：store 里若残留 >300 的旧值，载入自动钳到 300。
+
+## 1.3.9.6 Extensions 菜单项缩为 `SmoothScroll...`
+
+**用户要求**：菜单里 `Smooth Wheel Scroll settings...` 太长，缩到与 `ReaPack` 差不多的长度；
+**命令（动作名）不变**。
+
+- Extensions 菜单标签 = **`SmoothScroll...`**（`kMenuLabel`）。
+- **动作名仍是 `Smooth Wheel Scroll: settings...`** —— Actions 窗口靠它搜索，
+  不动；README/AGENTS 也仍按此名描述。
+- 标签不再写 open/close，**开关状态改为勾选**（`MFS_CHECKED`）。菜单是展开时重建的，
+  每次都会按实时状态重算。
 
 ## 验收
 
