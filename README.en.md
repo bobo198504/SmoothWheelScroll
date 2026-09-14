@@ -17,7 +17,7 @@ scroll or zoom (its action names end in `(MIDI CC relative/mousewheel)`). Those
 actions already accept a smooth relative amount. The problem is the *mouse*: one
 notch is one large `WHEEL_DELTA` step, so the same action receives one coarse jump
 per notch and the motion looks steppy. This plugin intercepts the wheel, runs the
-notch through a small physical model, and feeds the resulting travel to the **same
+notch through a small curve model, and feeds the resulting travel to the **same
 REAPER action**, in small pieces, over time.
 
 The result is the feel of a high-resolution trackpad driven by a normal, notched
@@ -52,7 +52,7 @@ notched wheel ──► this plugin ──► the SAME REAPER action, in small p
 | Every action whose name ends in `mousewheel` | same path (matched **by action name**, so custom/re-bound keys follow automatically) |
 | Track control panel (TCP) body | follows your Mouse Modifier: default `Scroll TCP` → vertical scroll; `Adjust vertical zoom` → vertical zoom |
 | MIDI editor piano keys | the MIDI editor's vertical-scroll action |
-| Mixer panel (MCP) | horizontal, by track (`SetMixerScroll`; whole-track granularity with the remainder carried across frames, so a slow roll never drops distance) |
+| Mixer panel (MCP) | horizontal (the animated travel is handed to REAPER's mixer window as **small wheel messages**, so REAPER's own `Scroll MCP` rule decides the step; the remainder is carried across frames, so a slow roll never drops distance) |
 | The two width-drag dividers beside the track panel | the half against the panel scrolls tracks; the outer half is left to REAPER (it is the main view there) |
 
 > Wherever the wheel lands — a scrollbar, or a Track/Mixer panel combination — the plugin
@@ -97,9 +97,10 @@ The plugin ships a settings panel. Open it either way:
    `Smooth Wheel Scroll: settings...` — you can bind it to a key, and pressing that
    key again closes the panel.
 
-It holds a master smoothing switch and five feel parameters, applied **live** and
-saved automatically, so closing the window keeps them. Nothing needs configuring —
-the defaults are the tuned ones.
+It holds a master smoothing switch, five feel sliders, and one knob per slider, applied
+**live** and saved automatically, so closing the window keeps them. Every slider and
+knob defaults to the MIDDLE of its range. Nothing needs configuring — it feels right
+untouched.
 
 Under the controls is a **response curve** — time `t` across, speed `v` up — drawing the
 "accelerate → peak → settle" shape and **updating live** with the five parameters. Each
@@ -113,7 +114,7 @@ direction and size of an adjustment, not for reading numbers off.
 </p>
 
 To verify it loaded, check the Extensions list or REAPER's startup log; the plugin
-also appears as `Smooth Wheel Scroll 1.5.3`.
+also appears as `Smooth Wheel Scroll 1.6.0`.
 
 ### Uninstall
 
@@ -152,11 +153,13 @@ The animation is pure math with no REAPER or Windows dependency, and lives in
 `src/anim_core.h`. It is exercised standalone:
 
 ```sh
-./test/check_v1_baseline.sh   # compares the model against the frozen 1.0.0 numbers
+./test/check_curve_model.sh   # curve model: notch distance / single peak / ceiling / roll build-up / step independence
+./test/check_classify.sh      # classification rules: before/after diff
 ```
 
-A single wheel notch must stay at **1.89** units with a peak velocity of **17.94**;
-those are the accepted reference values, and the script reports `OK` or `DRIFT`.
+`check_curve_model.sh` requires a single notch to travel **1.89** units (the accepted
+reference) and requires the speed curve to be **single-peaked** across parameter
+combinations and a long roll never to pass the ceiling the Hold setting defines.
 
 ---
 
@@ -166,33 +169,44 @@ those are the accepted reference values, and the script reports `OK` or `DRIFT`.
 |---|---|
 | `src/anim_core.h` | the animation itself — pure math, no REAPER, no Windows |
 | `src/smooth_wheel_scroll.cpp` | the REAPER extension: classify, feed, deliver |
-| `test/check_v1_baseline.sh` | regression gate against the frozen model |
+| `test/check_curve_model.sh` | regression gate for the curve model |
+| `test/check_classify.sh` | regression gate for the classification rules |
 | `versions/<ver>/` | frozen snapshots (source + DLL + `MODEL.md`) |
 | `third_party/` | the REAPER extension SDK |
 | `_diag/` | read-only measurement probes used while developing |
 
 ### The animation model
 
-A wheel notch gives the view a **velocity impulse**; friction bleeds it off. Position
-integrates velocity, so a notch starts from rest, accelerates, coasts and settles —
-and notches arriving before the previous one has decayed add their impulses, so a
-sustained roll builds speed.
+Speed is a curve: it **rises → peaks → falls back to zero**, and position is the
+integral of speed, so the motion is exactly the shape of that curve. The curve is five
+segments, each owned by one slider and shaped further by **one knob**:
 
-* impulse grows per notch (`Start %` for the first, `+ Accel %` for each further one)
-* a per-notch `smoothstep` onset (`S(u) = 3u² − 2u³`)
-* power-law friction, `dv/dt = −c·v^p` with `p = 0.8`
-* brake-by-rhythm: a faster roll loosens the brake, so a quick flick coasts further
-* a **speed ceiling**: near the top each notch adds less and less, and **nothing at all once
-  it is reached** — so "how fast can this roll get" is a definite number, not an asymptote
-* integrated on a fixed 0.25 ms grid, so the motion does not depend on the timer
+| Control | What it does |
+|---|---|
+| **Start** | the rise of the first segment; its **knob** is the rise duration (20–150 ms) |
+| **Accel** | the rise of the second segment (up to the top); knob sets that segment's curvature |
+| **Hold** | the last stretch of the climb — **and the speed ceiling**; knob sets its curvature |
+| **Coast** | the overrun after the top |
+| **Release** | the settle duration (20–300 ms) |
 
-**On "frozen":** the model's *feel* is the accepted reference, and later work may only tune
-parameters or the delivery around it. `anim_core.h` was byte-identical across releases for a
-long time; **1.5.3 is the one structural change** — the high-speed soft taper became an
-**explicit speed ceiling** (approved by the user), because the old form was not a real ceiling
-and made a fast sustained roll **double-humped**. A single notch and slow rolls are
-**bit-for-bit unchanged**; only very fast rolls are affected. After any change, run
-`test/check_v1_baseline.sh` (a single notch must still be **1.89 / 17.94**).
+* Each notch adds a **velocity impulse** and a sustained roll stacks them, so it keeps
+  gaining until **the ceiling the Hold setting defines** stops it.
+* Each segment is a **circular arc** bowed between its own two ends, built
+  **perpendicular to that segment as it appears on screen** (not perpendicular in raw
+  numbers — the axes are scaled differently, and the two differ by tens of degrees).
+* Segments are joined by a **fillet** (two fifths of each segment); the fillet grows with
+  the segments on screen, so a longer stretch gets a more generous round.
+* Curvature is capped: **no stretch, however far its knob is turned, tips past
+  horizontal** — a climb never dips first, a descent never lifts at its end.
+* The motion integrates on a fixed fine grid, so it is **independent of the timer**.
+
+**On "frozen":** **the 1.5.x physical model is the previous generation** and is archived
+in full under `_hist/MODEL_1.0/`. **1.6.0 is the curve model**, which carried on from
+1.5.3's explicit speed ceiling: the whole curve became **five segments joined by
+fillets**, the bulge direction was fixed (perpendicular in screen space), and the
+curvature cap was added. `test/check_v1_baseline.sh` targets the **old physical model**
+and no longer applies; the current gate is `test/check_curve_model.sh`
+(a single notch must be **1.89**).
 
 ### Delivery
 
@@ -200,6 +214,16 @@ The animated travel is handed to the action as REAPER's own **relative** value,
 using its fine-grained encoding (an integer 7-bit part plus a `1/256` fractional
 part, i.e. steps of `1/3840` of a notch). Values are delivered in small pieces over
 time rather than as a few whole units, which is what makes slow motion smooth.
+
+There are two **bounded exceptions**, both measured rather than assumed, and neither
+should be generalised from:
+
+* **The MIDI editor's vertical axis** (scroll and zoom): the receiver steps in whole rows
+  or fixed 2 px increments and cannot express `1/3840`, so it is given "the finest step the
+  receiver can express".
+* **Mixer horizontal scrolling**: no action exists to replay, so the travel is handed to
+  REAPER's mixer window as **small wheel messages** and REAPER's own `Scroll MCP` rule
+  decides the step.
 
 ### Parameter delivery: do not second-guess the receiver
 
@@ -254,6 +278,12 @@ so they do not have to be re-derived.
   area a plain wheel zooms the view, while `Alt`+wheel edits the selected notes'
   velocity — the window class is identical. Only the action REAPER reports tells
   them apart, which is why classification keys on the action, never on the window.
+* **The panel's light/dark state is two fixed palettes behind one switch, not a derivation.**
+  REAPER's dark mode is not mature yet (`GetSysColor` **does not change** under it — measured),
+  so the panel asks exactly one question — REAPER's own `win32_darkmode` — to choose a palette,
+  and each palette uses its own trustworthy source (dark reads the theme, light uses the standard
+  system colours). The switch is caught by **polling** as a backstop, because REAPER does not
+  promise to announce it.
 * **Lists were implemented, measured, and removed.** A list/tree control moves in
   whole rows and REAPER's native response is already instant, so a smoothed arrival
   can only add latency. The experiment is archived under `versions/1.4.0/`
@@ -268,10 +298,13 @@ so they do not have to be re-derived.
 * **Plain notched mice only.** Touchpad, touch and high-resolution wheels are left
   to REAPER — they are already fine-grained, and the point of the plugin is to give
   a notched wheel that same refined signal.
-* **A settings panel.** Its five parameters (start, accel, release, high-speed hold,
-  high-speed coast) span a range centred on the accepted feel, plus a master switch
-  (off = pass the wheel through untouched). The defaults are the tuned values, and it
-  feels right without touching anything.
+* **A settings panel.** Sliders shape the feel (start, accel, release, the speed
+  ceiling Hold defines, and Coast) and a knob per slider tunes the detail (Start's rise
+  duration 20–150 ms, and each remaining segment's curvature); everything defaults to the
+  middle of its range. The panel **follows REAPER's light/dark state** — caption, panel
+  colour, text and scrollbar all switch with it, with **no need to reopen the window**,
+  while the faders, knobs and curve keep their own colours (they read well in both). The
+  master switch itself is clickable: off passes the wheel through untouched.
 * The plugin does **not** add inertia of its own on top of a driver that already
   provides it; if your device already smooths, you may feel both.
 
