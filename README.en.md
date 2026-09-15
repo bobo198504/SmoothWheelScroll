@@ -31,7 +31,6 @@ sizes and user-customized rules all stay as REAPER defines them.
 | The arrange view's two scrollbars | Vertical bar scrolls; `Alt`+wheel zooms vertically. Horizontal bar: `Alt`+wheel zooms horizontally (the no-`Alt` paging-style pan is not taken over) |
 | MIDI editor: scroll + zoom | the MIDI editor section's own actions |
 | Track control panel (TCP) | follows your Mouse Modifier: default `Scroll TCP` → vertical scroll; `Adjust vertical zoom` → vertical zoom |
-| The two width-drag dividers beside the track panel | the inner half (against the panel) scrolls tracks; the outer half is left to REAPER |
 | MIDI editor piano keys | vertical scroll |
 | Mixer panel (MCP) | horizontal scroll |
 | Every action whose name contains `mousewheel` | matched **by action name**, so custom or re-bound keys work too |
