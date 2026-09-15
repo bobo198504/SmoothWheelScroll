@@ -2899,3 +2899,215 @@ Enable smooth那条有个不搭的背景色，可以去掉，直接用现在主�
    所以漏掉了。**删功能前，先明确"它现在提供的、别处没有的东西"是什么。**
 4. **发现自己判断错时，立刻完整回退并核对二进制**（本次 md5 逐位一致），
    不要"就地修补"一个已经判断错方向的分支。
+
+## 二十九、面板"表格化"：加一个控件 = 加一行表（用户要求，2026-09-15）
+
+**用户诉求**：「后面还会添加功能，现在的问题怕以后添加功能，每次都要每两版」
+→ 选定方案：「**可以，用第三步优化**」（第三步 = 把面板控件表格化，而不是换 UI 框架）。
+
+### 背景：为什么是"表格化"而不是"换框架"
+
+用户曾考虑用 Flutter / ImGui 重写面板。**核实后否掉了**，理由记在这里免得重议：
+
+- **Flutter 不可行**：它是**应用级框架**（自带 Dart VM + 渲染引擎），而 REAPER 扩展只能是
+  一个被宿主加载的 **DLL**（导出 `ReaperPluginEntry`）。等于在 REAPER 进程里再开一个应用，
+  体积 163KB → ~10MB 量级。
+- **WebView2 不可行**：每个实例是一个 `msedgewebview2.exe` **独立进程**（几十 MB），
+  且不保证用户装了运行时。
+- **ImGui 可行，但引入新的风险面**：它自绘一切（确实能摆脱 `SetWindowTheme` 那类问题），
+  **但必须配图形后端（D3D/OpenGL）**。本项目当前是**纯 GDI**——用一个已知、可定位、
+  只在两个 API 上的兼容风险，去换"用户显卡/驱动碎片化"这个更大的风险面，**方向错了**。
+- **关键数据**：面板 2740 行（源码 52%），但**历史事故里 0 起是布局/绘制导致的**，
+  17 起是"跟系统主题机制较劲"（`SetWindowTheme` / `DwmSetWindowAttribute` / 递归）。
+  **手写 Win32 布局不会崩——它是"麻烦"，不是"不稳定"。** 换框架解决不了"麻烦"，
+  而且会新增"不稳定"。
+
+### 改了什么
+
+**目标：加一个控件 = 加一行表。**
+
+1. **控件 ID 改为按索引计算**（原来 15 行手写枚举）：
+   `SliderIdOf(i)` / `LabelIdOf(i)` / `KnobIdOf(i)`，三个基址分开免得撞号。
+   **手写 ID 列表是"加控件时最容易忘"的一处，而且它必须与表同序 —— 现在不可能不同序了。**
+2. **`SliderSpec` 变成"一行描述一个控件的全部"**：名称、值、范围、单位、两端标签、
+   **默认值**、**颜色**，以及它的**旋钮**（值/范围/默认/名字）。
+3. **`BuildSliderSpecs()` 只剩一张表**（5 行）+ 一个循环：
+   - ID 从索引填；
+   - `g_knobs[]` 变成这张表的**视图**（`knobValue/knobMin/knobMax/knobName` 直接取自该行），
+     不再是第二份需要同步的数据；
+   - `g_knobPos[]` 一并初始化。
+4. **删掉三个平行数组**：`kSliderHue[]`（并入 `hue` 字段）、`kDefaultPerSlider[]`、
+   `kDefaultPerKnob[]`（并入 `defValue` / `knobDef`）。
+   **这三个原来是"第二处真相"**：改一处忘一处就会"复位到别的参数"或"颜色错位"——
+   历史上真的出过（§19.24 记过 `kDefaultPerSlider` 与顺序不同步的问题）。
+
+### 等价性验证（重构必须做，不能凭"看起来对"）
+
+- **机械逐行核对**新旧表：行序、值指针、范围常量、单位、端标、旋钮绑定、
+  5 个 `RGB()` 值 —— **全部一致**。
+- 门：`check_curve_model.sh` 五项（单格 **1.890**）、`check_classify.sh` 差异仍只有 `one page`。
+- 两种构建（默认 / `--no-settings-ui`）都通过；`-Wall -Wextra` 零告警。
+- DLL 163455 → **162837** 字节（`3a8b94cb`），已本地部署。
+
+### 以后加一个控件要做的（现在就这么多）
+
+1. `kNumSliders` 加一；
+2. 在 `TUNING` 块加它的取值范围与默认值常量；
+3. 在 `BuildSliderSpecs` 的 `kTable` 里**加一行**。
+
+**不再需要**：改 ID 枚举、改颜色表、改两个默认值表、改旋钮表。
+
+### 教训
+
+**"并行数组"是 bug 的温床，因为它把"一件事"拆成了多处真相。**
+`kSliderHue` / `kDefaultPerSlider` / `kDefaultPerKnob` / ID 枚举 / 旋钮表 —— 五处都在描述
+同一组控件，任何一处漏改都**不报错**，只是行为悄悄错位。
+**能合成一张表的就合成一张表；合成不了的（值本身），也要让"从哪来"唯一。**
+
+## 三十、第三方 Darkmode 插件为何让 Enable 失效 —— 已定位到对方代码（2026-09-15）
+
+**用户告知**：网友装了另一个第三方 REAPER Darkmode 插件，导致 Enable 那条失效；
+用户自己有该插件的复刻（`D:\Projects\Code\ReaperDarkMode`）。**我去读了那个项目，根因确认。**
+
+### 根因（在对方代码里，不在我们这边）
+
+对方用 `SetWindowSubclass` **逐个窗口子类化**，按**窗口类名 + 按钮样式**分派
+（`StyleWindow()`，`win32-custom-menubar-aero-theme.cpp`）。对 `Button` 类窗口它是这样判的：
+
+```c
+DWORD typeStyle = GetWindowLong(hwnd, GWL_STYLE) & BS_TYPEMASK;
+bool isStandardButton = (typeStyle == BS_PUSHBUTTON || typeStyle == BS_DEFPUSHBUTTON);
+bool isCheckBox = (typeStyle == BS_CHECKBOX || typeStyle == BS_AUTOCHECKBOX || ...);
+bool isRadio = (...); bool isGroupBox = (...);
+if (!isStandardButton && !isCheckBox && !isRadio && !isGroupBox) {
+    // "FAKE LINK RECOGNITION" —— 它认为"不是标准样式的 Button"就是 REAPER 用来假扮 SysLink 的控件
+    SetWindowSubclass(hwnd, FakeSysLinkSubclassProc, 10101, 0);
+}
+```
+
+**我们的总开关是 `BS_OWNERDRAW`** —— 不在它列的四种之内 → 被判为"假 SysLink" →
+挂上 `FakeSysLinkSubclassProc`。而那个过程函数**完全接管 `WM_PAINT`**：
+
+```c
+if (uMsg == WM_PAINT) {
+    ...FillRect(父窗口底色)...
+    SetTextColor(hdc, RGB(0, 150, 255));      // 只画它自己的淡蓝文字
+    DrawTextW(...); EndPaint(...);
+    return 0;   // "完全由我负责绘制"
+}
+```
+
+它**不调用 `DefSubclassProc`** → 按钮自己的 `WM_PAINT` 不执行 → **按钮永远不会发 `WM_DRAWITEM`**
+→ 我们在 `WM_DRAWITEM` 里画的方框与勾，**一次都没被调用**。于是只剩它画的那行文字，
+**勾永远不出现** —— 正是用户看到的"Enable 失效"。
+
+### 为什么只有 Enable 中招（其余都正常）
+
+按类名分派：`GetWindowClassType()` 认识 `Button` / `Static` / `#32770` / `REAPER*` 前缀等。
+我们的类名全是 `SmoothWheelScroll*`：
+
+| 我们的窗口 | 类名 | 对方是否处理 |
+|---|---|---|
+| 面板本体 | `SmoothWheelScrollCfg` | **不认**（`WND_UNKNOWN`）→ 不碰 |
+| 推子 | `SmoothWheelScrollFader` | 不认 → 不碰 |
+| 旋钮 | `SmoothWheelScrollKnob` | 不认 → 不碰 |
+| **总开关** | **`Button`**（系统类） | **认，且因 `BS_OWNERDRAW` 误判为假 SysLink** |
+| 标签 | `Static`（系统类） | 认（对静态文本它给暗色，通常没问题） |
+
+**所以：只要我们用系统 `Button` 类，就落进别人的分派表；用 `BS_OWNERDRAW` 更是直接踩中它的误判分支。**
+
+### 结论与建议（待用户决定是否实施）
+
+**结构性修法：总开关不再用 `Button` 子控件，改为直接画在面板上。**
+我们的面板类名对方不认，**天然免疫**这类子类化工具；顺带还消掉两件旧麻烦
+（不透明矩形导致的"底色带"、以及 `BS_OWNERDRAW` 不保存勾选状态）。
+
+**代价**：需要自己处理点击命中、空格键与焦点（面板已在收键盘消息，可接）。
+
+**教训**：**用系统控件类 = 主动加入所有"按类名分派"的第三方工具的管辖范围。**
+自绘控件用**自己的窗口类名**才安全（推子/旋钮一直如此，所以从没出过问题）。
+
+### 30.1 实施：总开关改为**面板自绘**（用户批准"推荐"方案）
+
+**用户决定**：「**改为面板自绘（推荐）**」。
+
+#### 改了什么
+
+**删掉了那个 `Button` 子控件**，总开关现在由面板自己画：
+
+| 删除 | 替代 |
+|---|---|
+| `g_chkGlide`（HWND） | `g_switchRect` + `g_hasSwitch`（纯矩形） |
+| `CreateWindowExA(0,"BUTTON",...,BS_OWNERDRAW,...)` | 无控件 |
+| `WM_DRAWITEM` 里的绘制代码 | `DrawSwitch(HDC)`，由 `PaintPanel` 调用 |
+| `WM_COMMAND` / `IDC_CHK_GLIDE` 分支 | `WM_LBUTTONDOWN` 命中 `g_switchRect` 即翻转 |
+| `PanelKeyHandler` 里给 `"Button"` 让路的空格分支 | 删除（已无复选框） |
+| `FitWindowToContent` 向复选框问高度 | 直接用 `kEnableText` 量 |
+| `IDC_CHK_GLIDE` 枚举项 | 删除 |
+
+新增 `WM_SETFOCUS` / `WM_KILLFOCUS`：重画开关的焦点框
+（焦点在面板本体，因为不再有子控件争焦点）。
+
+**结果：插件里不再有任何 `Button` 类窗口**（实测 grep 全部 `CreateWindowExA`：
+只剩 `STATIC` 标签 + 插件自己的三个类 `SmoothWheelScrollCfg/Fader/Knob/AnimWnd`）。
+
+#### 为什么这就免疫了
+
+第三方 Darkmode 工具（含 `ReaperDarkMode`）**按窗口类名分派**：
+它们只认 `Button` / `Static` / `#32770` / `REAPER*` 前缀等系统类名。
+我们的类名是 `SmoothWheelScroll*` —— **它们不认，因此不会子类化，也就碰不到我们**。
+（`STATIC` 标签仍会被它们改字色，那只影响外观，而且它们对静态文本只上色、不接管绘制。）
+
+**这条规律值得记住**：**自绘控件用"自己的窗口类名"，才不会被"按类名分派"的第三方工具接管。**
+推子与旋钮一直用自己的类名，所以从没出过问题 —— 这不是巧合。
+
+#### 顺带修掉的两个旧麻烦
+
+1. **不透明色带**：标准/主题化复选框会把**整个矩形**刷成自己的面色，之前要靠"缩到文字宽度"
+   绕开；现在面板自己画，**矩形就是面板色**，问题从根上消失。
+2. **`BS_OWNERDRAW` 不保存勾选状态**（`BM_SETCHECK` 无效，§26.5）：现在状态**只在 `g_glideOn`**，
+   连"问控件"这一步都没有了。
+
+#### 验证
+
+- 默认构建与 `--no-settings-ui` 都通过；`-Wall -Wextra` 零告警。
+- 门：`check_curve_model.sh` 五项（单格 **1.890**）、`check_classify.sh` 差异仍只有 `one page`。
+- DLL 162837 → **161652** 字节（`f68d5241`），已本地部署。
+
+> ⚠️ **待用户实测**：开关能否点、勾是否显示、空格/焦点行为、以及**装了第三方 Darkmode 后是否仍正常**。
+> 这一条只能由用户验证（我无法在本机复现那个第三方插件的影响）。
+
+## 三十一、1.6.1：公开发布 —— 用户 2026-09-15 明确授权
+
+**用户原话**：「**发布，更新个小版本，1.6.1**」。§0 要求一次一议，本次在该授权内。
+
+### 版本与快照
+
+- **`v1.6.1`**：release tag/name 用**纯三段**（§0）。`ext_name` = `Smooth Wheel Scroll 1.6.1`。
+- 快照 `versions/1.6.1/`：`anim_core.h`（`d785d937`）+ `smooth_wheel_scroll.cpp`（`9bd33762`）
+  + DLL（`01eaea81`）+ `MODEL.md`。三个文件与工作树逐一核对相同。
+- **`anim_core.h` 与 1.6.0 逐字节相同**（模型零改动，单格仍 1.890）。
+
+### 本版内容
+
+| # | 改动 | 记录 |
+|---|---|---|
+| 1 | 总开关改**面板自绘**，不再用 `Button` 子控件 → 免疫第三方 Darkmode 的类名分派 | §30 / §30.1 |
+| 2 | 面板控件描述**表格化**（加控件 = 加一行） | §29 |
+
+### 门的结果（发布前）
+
+- `check_curve_model.sh`：单格 **1.890**、单峰 9/9、封顶 5/5、连滚累积、步长无关 —— 全过。
+- `check_classify.sh`：差异 3 处、全是 `one page`（与 1.6.0 相同）。
+- 默认构建与 `--no-settings-ui` 都通过；`-Wall -Wextra` 零告警。
+- 已确认 DLL 不含调试日志（`SmoothWheelScroll.log` 出现 0 次）、版本串为 `1.6.1`。
+
+### 发布物
+
+- GitHub release **`v1.6.1`**，附件 = 本版 DLL；说明**中英双份**
+  （`build/RELEASE_NOTES_v1.6.1.md`，按 §0 的极简格式：`#` 修复 / `+` 小功能）。
+- README 已同步版本号（功能描述无需改：未涉及实现细节）。
+
+### 遗留（已写进发布说明，非阻塞）
+
+- **第三方 Darkmode 下总开关是否正常**需**用户实测**（本机无法复现该插件的影响）。
