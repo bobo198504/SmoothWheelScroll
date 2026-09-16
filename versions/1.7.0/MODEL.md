@@ -3,11 +3,11 @@
 **新模型版。** 相对 **1.6.1**，本版把动画模型整体换成 **3.0「速度预算 → 每格行程」**，
 并把设置面板重做成 **4 个滑杆 + 运动轨迹图**。这是 1.6.1 之后的第一次公开发布。
 
-DLL md5 `f58797e460c5129f6c999b103efb610b`
+DLL md5 `bdae1612816c6dd5d3a921f148bf1a74`
 
 | 文件 | md5 |
 |---|---|
-| `smooth_wheel_scroll.cpp` | `44559508abf748a534cd82ac89ba9cd1` |
+| `smooth_wheel_scroll.cpp` | `22c1d5627f335f0bbc6473f107529667` |
 | `anim3_core.h` | `8d2231cef1e3d70860ea30290198d40e` |
 | `anim161_core.h` | `d785d9371295448461a033bb1efd179e`（与 1.6.1 **逐字节相同**） |
 | `model.h` | `ff6fecfe0105c0f338ada982412866c5` |

@@ -588,6 +588,10 @@ static const double kChartKneeMin = 0.02;      // the knee never quite reaches t
 static const double kChartKneeX = 0.20;        // where the first segment ends
 static const double kChartRampX0 = 0.34, kChartRampX1 = 0.88; // where the climb reaches the peak
 static const double kChartCorner = 0.10;       // how much of the span a rounded corner may take
+// The animation curve's stroke, in pixels. Heavier than a hairline: it is the subject of the picture,
+// and at 1px it read as a thin guide rather than as the thing being shown. (Doubled on the user's
+// call, 2026-09-16: "动画曲线加粗一倍".)
+static const int kChartCurvePx = 4;
 static const int kChartMaxTicksX = 8;          // at most this many X ticks (ms)
 static const int kChartMaxTicksY = 8;          // at most this many Y ticks (deltas)
 static const double kChartTickFont = 0.72;     // tick numbers, as a fraction of the dialog font
@@ -3289,19 +3293,15 @@ static void DrawMonitorBlock(HDC dc)
   const int oldBk = SetBkMode(dc, TRANSPARENT);
   const int padX = 8;
   const int x0 = r.left + padX;
-  char b[256];
 
-  SetTextColor(dc, g_theme.sub);
-  {
-    // The channels, named in the order the sliders appear. Glide's is the FLOOR (its colour) because
-    // the drawing already spans the full width: what Glide scales is the time that width stands for.
-    const char *head = "Motion  (blue glide, amber knee, green slope, violet peak; grey = native)";
-    TextOutA(dc, x0, r.top + 4, head, (int)strlen(head));
-  }
+  // NO CAPTION LINE. There used to be one ("Motion (blue glide, amber knee, ...)"), but it only
+  // spelled out what the picture shows by itself: each segment is drawn in its own slider's colour,
+  // and the fader right above it is that same colour. A legend for a colour-coded picture that sits
+  // under the colour-coded controls is noise (the user's call, 2026-09-16: "那行 Motion，也不用，
+  // 看得懂，去掉"). The space it took goes to the chart.
 
-  // The drawing box: under the caption, with a left band for the Y tick numbers, and above BOTH the
-  // X tick numbers and the device line. Each band is measured, not guessed, so a larger font or DPI
-  // cannot make the numbers overlap the plot or the device line.
+  // The drawing box: with a left band for the Y tick numbers, and above the X tick numbers. Each
+  // band is measured, not guessed, so a larger font or DPI cannot make the numbers overlap the plot.
   int tickH = 0, digitW = 0;
   {
     HDC mdc = GetDC(nullptr);
@@ -3313,8 +3313,11 @@ static void DrawMonitorBlock(HDC dc)
     tickH = tm.tmHeight + 2;
     digitW = tm.tmAveCharWidth * 6; // room for a four-digit number plus a little slack
   }
-  const int belowBox = tickH + 16; // the X tick band, then the device line
-  RECT box = {x0 + digitW, r.top + 22, r.right - padX, r.bottom - belowBox};
+  // The X tick band, plus a small margin. It used to be much taller because the device readout sat
+  // under it; with that line gone the chart takes the space instead. The TOP margin likewise shrank
+  // once the caption line was dropped -- the chart now starts just below the block's frame.
+  const int belowBox = tickH + 6;
+  RECT box = {x0 + digitW, r.top + 6, r.right - padX, r.bottom - belowBox};
   if (box.bottom - box.top < 20 || box.right - box.left < 40)
   {
     SetBkMode(dc, oldBk);
@@ -3500,7 +3503,7 @@ static void DrawMonitorBlock(HDC dc)
           SelectObject(dc, op);
           DeleteObject(pen);
         }
-        pen = CreatePen(PS_SOLID, 2, segCol[seg]);
+        pen = CreatePen(PS_SOLID, kChartCurvePx, segCol[seg]);
         op = SelectObject(dc, pen);
         MoveToEx(dc, px, py, nullptr); // a fresh run: no line drawn across the colour change
         prevSeg = seg;
@@ -3563,24 +3566,11 @@ static void DrawMonitorBlock(HDC dc)
   }
 
 
-  // The device verdict on one short line, where the value table used to be. The step size is named
-  // because that is the number the two ball SHAPES stand for: a free spinner works in fine pieces,
-  // a notched mouse in whole notches.
-  {
-    const Device d = LastWheelDevice();
-    const bool animating = (d == Device::kNotched || d == Device::kFreeSpin);
-    const char *selfy;
-    switch (d)
-    {
-    case Device::kNotched: selfy = "notched"; break;
-    case Device::kFreeSpin: selfy = "free-spin"; break;
-    case Device::kTouchpad: selfy = "touchpad (passed through)"; break;
-    default: selfy = "unknown"; break;
-    }
-    SetTextColor(dc, animating ? g_theme.text : g_theme.sub);
-    _snprintf(b, sizeof(b), "device: %s (steps of %.0f delta)", selfy, AnimOffQuantum());
-    TextOutA(dc, x0, r.bottom - 15, b, (int)strlen(b));
-  }
+  // The device verdict that used to sit under the chart is gone. It was the last remnant of the old
+  // parameter monitor (its value table was removed in AGENTS.md 113, and this one line was kept),
+  // and on the chart it was only in the way -- a "device: notched (steps of 120 delta)" readout
+  // below a picture that already shows the device by the SIZE of its steps. Nothing diagnostics-facing
+  // belongs on a settings panel.
 
   SetBkMode(dc, oldBk);
   SelectObject(dc, oldFont);
