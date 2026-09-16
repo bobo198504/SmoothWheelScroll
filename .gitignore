@@ -5,11 +5,21 @@ build/
 # part of the project). The meaningful frozen snapshots live in versions/.
 _hist/
 _diag/*.js
+# The probe SOURCES live flat in _diag/ and are tracked; subdirectories under it are
+# session dumps (recovered-history copies and A/B scratch trees), not project content.
+_diag/*/
+# The editor session's own working files.
+.zcode/
 
 # Capture logs from the diagnostic probes and the --debug-log build
 _diag/*.log
 _diag/*.txt
 _diag/*.bat
+
+# Probe binaries. The probes are tracked as sources under _diag/, but the executables
+# they build are never committed.
+_diag/*.exe
+_diag/*.exe.stackdump
 
 # REAPER creates these next to any project it opens
 media/

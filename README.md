@@ -51,7 +51,7 @@ Windows x64，REAPER 7。
 2. 放进 `UserPlugins`：便携版 `<REAPER>/UserPlugins/`，普通安装 `%APPDATA%\REAPER\UserPlugins\`。
 3. 重启 REAPER。
 
-加载后，扩展列表与启动日志中显示为 `Smooth Wheel Scroll 1.6.1`。
+加载后，扩展列表与启动日志中显示为 `Smooth Wheel Scroll 1.7.0`。
 
 ### 设置面板
 
@@ -60,12 +60,18 @@ Windows x64，REAPER 7。
 1. **Extensions 菜单** → `SmoothScroll...`
 2. **Actions 窗口**搜 `Smooth Wheel Scroll`，用 `Smooth Wheel Scroll: settings...`；可绑定快捷键，再按一次关闭。
 
-面板包含缓动总开关、5 个滑杆，以及每个滑杆对应的一个旋钮。改动即时生效、自动保存，
-默认值取各自范围的中点。
+面板包含缓动总开关、4 个滑杆，以及滑杆下方的**运动轨迹图**。改动即时生效、自动保存。
 
-* **滑杆**调手感：起步力度、加速堆量、缓动时长、速度上限（Hold）、下冲（Coast）。
-* **旋钮**调细节：Start 的起步时长（20–150 ms），其余四段的曲率。
-* 底部为速度响应曲线（横轴时间 `t`、纵轴速度 `v`），随参数实时变化；五段各有颜色，与对应滑杆一致。
+* **Glide length** — 一格动画的时长（100–300 ms，默认 **200**）。
+* **Slow step** — 慢轮一格走多少 delta（1–10，默认 **5**）。
+* **Ramp-up** — 转多少 delta 才涨满到整格（60–2000，默认 **1000**）。
+* **Top speed** — 最快时能冲到自身速度的几倍（1.0–2.0，默认 **1.5**）。
+* **运动轨迹图**：脚本化滚动跑一遍，画「滚轮自己的整步路径」（灰虚线）与「本插件给的平滑路径」
+  （按滑杆分段上色），并让**一颗球沿路径跑**。**收到一个滚轮消息就发一颗球**（最多 6 颗同时在飞）。
+  关掉总开关时球也跑，走的是整步（方块）那条 —— 一眼看出开关在做什么。
+  四个参数**各占一个视觉通道**：Glide 管时间轴、Slow step 管膝点高度、Ramp-up 管坡度、
+  Top speed 管纵轴缩放（原生参考线在 `1/Top` 处，`Top=1.0` 时顶线正好压在它上面）。
+  刻度按数值取，拉 Glide / Top 时**跟着缩放**。
 * 面板跟随 REAPER 的浅色/深色：标题栏、面板底色、文字、滚动条都会随之切换。
 * 关掉总开关即完全放行，滚轮回到 REAPER 原生行为。
 
@@ -81,7 +87,7 @@ Windows x64，REAPER 7。
 
 ## 从源码构建
 
-一个翻译单元加一个头文件，用 C++17 编译器对着仓库内的 REAPER SDK（`third_party/`）编译。
+一个翻译单元加几个头文件，用 C++17 编译器对着仓库内的 REAPER SDK（`third_party/`）编译。
 参考构建使用便携版 MinGW-w64。
 
 ```sh
@@ -100,8 +106,13 @@ Windows x64，REAPER 7。
 回归门（脱离 REAPER 运行）：
 
 ```sh
-./test/check_curve_model.sh   # 模型：单格行程 / 单峰 / 封顶 / 连滚累积 / 与步长无关
-./test/check_classify.sh      # 分类规则改动前后对比
+./test/check_anim3.sh          # 窗口模型：等分、总量精确、与帧率无关、重叠相加
+./test/check_conservation.sh   # 拿多少给多少（精确）
+./test/check_travel.sh         # 每格行程来自速度预算，且与设备无关
+./test/check_device.sh         # 有格 / 无级 / 触控板 的区分
+./test/check_routes.sh         # 投递路由与冻结基线逐条对比
+./test/check_classify.sh       # 分类规则改动前后对比（只允许 one page）
+./test/check_filter.sh         # 过滤器规则（各轴的投递粒度）
 ```
 
 ---
@@ -110,8 +121,12 @@ Windows x64，REAPER 7。
 
 | 文件 | 内容 |
 |---|---|
-| `src/anim_core.h` | 动画模型（纯数学，不依赖 REAPER / Windows） |
-| `src/smooth_wheel_scroll.cpp` | REAPER 扩展：分类、喂入、投递 |
+| `src/anim3_core.h` | 3.0 模型：窗口 / 付出形状（纯数学，不依赖 REAPER / Windows） |
+| `src/anim161_core.h` | 1.6.1 曲线模型（竖直缩放用，与 1.6.1 逐字节相同） |
+| `src/model.h` | 模型接缝：唯一对外的模型入口 |
+| `src/routing.h` | 投递路由：哪条动作、什么粒度 |
+| `src/device.h` | 设备分类（有格 / 无级 / 触控板） |
+| `src/smooth_wheel_scroll.cpp` | REAPER 扩展：分类、喂入、投递、设置面板 |
 | `test/` | 回归门 |
 | `versions/<ver>/` | 各版本冻结快照 |
 | `third_party/` | REAPER 扩展 SDK |

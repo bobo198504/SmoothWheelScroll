@@ -8,14 +8,17 @@
 // "one page" actions and for NOTHING else. Anything else showing up as a difference is a
 // regression against the documented binding rules (AGENTS.md section 2).
 //
-// Build/run:  g++ -O2 _diag/classify_probe.cpp -o /tmp/cp && /tmp/cp
+// Build/run:  g++ -std=c++17 -O2 -I../src -o cp _diag/classify_probe.cpp && ./cp
+#include "routing.h"
+
 #include <stdio.h>
 #include <string.h>
 #include <ctype.h>
 #include <vector>
 #include <string>
 
-static bool StrHasI(const char *s, const char *sub)
+// The BEFORE copy needs its own case-insensitive test; the AFTER path uses the one in routing.h.
+static bool StrHasIOld(const char *s, const char *sub)
 {
   const size_t n = strlen(sub);
   for (; *s; ++s)
@@ -35,7 +38,7 @@ static bool InScopeOld(const char *nm)
 {
   if (!nm || !*nm) return false;
   if (!strstr(nm, "View")) return false;
-  const bool relativeFamily = StrHasI(nm, "mousewheel");
+  const bool relativeFamily = StrHasIOld(nm, "mousewheel");
   if (!relativeFamily)
   {
     if (!strstr(nm, "wheel")) return false;
@@ -48,21 +51,16 @@ static bool InScopeOld(const char *nm)
 }
 
 // AFTER the fix: "one page" is excluded from both families, up front.
+//
+// This now delegates to the REAL rule in src/routing.h (the same ClassifyName the plugin calls),
+// so the probe cannot drift from the shipped behaviour -- which is how an earlier hand-copied
+// mirror managed to pass while asserting the wrong thing (AGENTS.md 70).
 static bool InScopeNew(const char *nm)
 {
-  if (!nm || !*nm) return false;
-  if (!strstr(nm, "View")) return false;
-  if (strstr(nm, "one page")) return false;
-  const bool relativeFamily = StrHasI(nm, "mousewheel");
-  if (!relativeFamily)
-  {
-    if (!strstr(nm, "wheel")) return false;
-    if (!strstr(nm, "Zoom") && !strstr(nm, "Scroll")) return false;
-    if (strstr(nm, "snap to theme") || strstr(nm, "height") ||
-        strstr(nm, "Modify"))
-      return false;
-  }
-  return true;
+  ActionSpec out;
+  // Section 0 (main) is representative here: the probe only exercises the name rule, and the
+  // name rule's admission decision does not depend on which admitted section it is asked about.
+  return ClassifyName(kSectionMain, nm, out);
 }
 
 int main()

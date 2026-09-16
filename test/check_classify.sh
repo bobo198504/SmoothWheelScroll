@@ -12,7 +12,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." && pwd)"
 export PATH="/d/Projects/Code/_tools/w64devkit/bin:$PATH"
 
 OUT="$ROOT/build/_classify_probe.exe"
-g++ -O2 -o "$OUT" "$ROOT/_diag/classify_probe.cpp"
+g++ -std=c++17 -O2 -I"$ROOT/src" -o "$OUT" "$ROOT/_diag/classify_probe.cpp"
 "$OUT"
 rc=$?
 rm -f "$OUT"

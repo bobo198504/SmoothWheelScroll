@@ -60,7 +60,7 @@ Windows x64, REAPER 7.
    `%APPDATA%\REAPER\UserPlugins\`.
 3. Restart REAPER.
 
-Once loaded it appears as `Smooth Wheel Scroll 1.6.1` in the Extensions list and the startup log.
+Once loaded it appears as `Smooth Wheel Scroll 1.7.0` in the Extensions list and the startup log.
 
 ### Settings panel
 
@@ -71,14 +71,22 @@ Open it either way:
    `Smooth Wheel Scroll: settings...`; it can be bound to a key, and pressing that key again
    closes the panel.
 
-The panel holds a master smoothing switch, five sliders, and one knob per slider. Changes apply
-live and are saved automatically; every default is the middle of its range.
+The panel holds a master smoothing switch, four sliders, and a **motion chart** under them.
+Changes apply live and are saved automatically.
 
-* **Sliders** shape the feel: start, accel, release, the speed ceiling (Hold), and Coast.
-* **Knobs** tune the detail: Start's rise duration (20–150 ms), and the curvature of the other
-  four segments.
-* Below them is a speed response curve (time `t` across, speed `v` up) that follows the
-  parameters live; each of the five segments has its own colour, matching its slider.
+* **Glide length** — how long one notch's animation takes (100–300 ms, default **200**).
+* **Slow step** — how far a slow notch moves, in deltas (1–10, default **5**).
+* **Ramp-up** — how much turning it takes to reach a full notch (60–2000, default **1000**).
+* **Top speed** — how far past the wheel's own speed the fastest rolls may climb
+  (1.0–2.0x, default **1.5**).
+* **The motion chart** runs a scripted roll and draws the wheel's own stepped path (dashed grey)
+  against the smooth path the plugin hands over (coloured per slider), with **one ball running
+  along it**. **Every received wheel message launches a ball** (up to six in flight). With the
+  master switch off the ball still runs — along the stepped path — so the switch's effect is
+  visible at a glance. Each of the four sliders owns one visual channel: Glide the time axis,
+  Slow step the knee's height, Ramp-up the slope, Top speed the vertical scale (the native
+  reference sits at `1/Top`, so at `Top = 1.0` the flat top rests exactly on it). The tick numbers
+  are taken from the real values, so they rescale as Glide and Top move.
 * The panel follows REAPER's light/dark state: caption, panel colour, text and scrollbar.
 * Turning the master switch off passes the wheel through untouched.
 
@@ -94,7 +102,7 @@ Delete the DLL and restart REAPER. Apart from the panel's parameters it writes n
 
 ## Build from source
 
-One translation unit plus one header, built with a C++17 compiler against the REAPER SDK
+One translation unit plus a few headers, built with a C++17 compiler against the REAPER SDK
 vendored in `third_party/`. The reference build uses a portable MinGW-w64 toolchain.
 
 ```sh
@@ -113,8 +121,13 @@ Build flags:
 Regression gates (run standalone, no REAPER needed):
 
 ```sh
-./test/check_curve_model.sh   # model: notch travel / single peak / ceiling / roll build-up / step independence
-./test/check_classify.sh      # classification rules, before/after
+./test/check_anim3.sh          # window model: equal parts, exact total, frame-rate independent, overlaps add
+./test/check_conservation.sh   # take N, give N -- exactly
+./test/check_travel.sh         # travel from the speed budget, device-independent
+./test/check_device.sh         # notched / free-spinning / touchpad separation
+./test/check_routes.sh         # routing against the frozen baseline, line by line
+./test/check_classify.sh       # classification rules, before/after (only "one page" may differ)
+./test/check_filter.sh         # the filter's delivery granularity per axis
 ```
 
 ---
@@ -123,8 +136,12 @@ Regression gates (run standalone, no REAPER needed):
 
 | File | What it is |
 |---|---|
-| `src/anim_core.h` | the animation model (pure math, no REAPER, no Windows) |
-| `src/smooth_wheel_scroll.cpp` | the REAPER extension: classify, feed, deliver |
+| `src/anim3_core.h` | the 3.0 model: windows / payout shape (pure math, no REAPER, no Windows) |
+| `src/anim161_core.h` | the 1.6.1 curve model (vertical zoom only; byte-identical to 1.6.1) |
+| `src/model.h` | the model seam: the one entry point to the models |
+| `src/routing.h` | delivery routing: which action, at what granularity |
+| `src/device.h` | device classification (notched / free-spinning / touchpad) |
+| `src/smooth_wheel_scroll.cpp` | the REAPER extension: classify, feed, deliver, settings panel |
 | `test/` | the regression gates |
 | `versions/<ver>/` | frozen snapshots per release |
 | `third_party/` | the REAPER extension SDK |

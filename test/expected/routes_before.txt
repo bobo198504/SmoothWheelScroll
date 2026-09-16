@@ -1,0 +1,38 @@
+section | command | name                                         | matched drive  horiz rel  delivery
+--------+---------+----------------------------------------------+--------- ------ ----- ---- --------
+      0 |     988 | View: Scroll horizontally (MIDI CC relative/ | yes     replay H   0   stream
+      0 |     977 | View: Scroll horizontally reversed (MIDI CC  | yes     replay H   0   stream
+      0 |     989 | View: Scroll vertically (MIDI CC relative/mo | yes     replay V   0   step
+      0 |     978 | View: Scroll vertically reversed (MIDI CC re | yes     replay V   0   step
+      0 |     990 | View: Zoom horizontally (MIDI CC relative/mo | yes     replay H   0   stream
+      0 |     979 | View: Zoom horizontally reversed (MIDI CC re | yes     replay H   0   stream
+      0 |    1000 | View: Zoom vertically (MIDI CC relative/mous | yes     replay V   0   step
+      0 |    1001 | View: Zoom vertically reversed (MIDI CC rela | yes     replay V   0   step
+    100 |     989 | View: Scroll vertically (MIDI CC relative/mo | yes     replay V   0   step
+    100 |    1000 | View: Zoom vertically (MIDI CC relative/mous | yes     replay V   0   step
+  32060 |   40430 | View: Zoom vertically (MIDI CC relative/mous | yes     replay V   0   immed
+  32060 |   40431 | View: Zoom horizontally (MIDI CC relative/mo | yes     replay H   0   stream
+  32060 |   40432 | View: Scroll vertically (MIDI CC relative/mo | yes     replay V   0   step
+  32060 |   40433 | View: Scroll horizontally (MIDI CC relative/ | yes     replay H   0   stream
+  32060 |   40660 | View: Scroll horizontally reversed (MIDI CC  | yes     replay H   0   stream
+  32060 |   40661 | View: Scroll vertically reversed (MIDI CC re | yes     replay V   0   step
+  32060 |   40662 | View: Zoom horizontally reversed (MIDI CC re | yes     replay H   0   stream
+  32060 |   40663 | View: Zoom vertically reversed (MIDI CC rela | yes     replay V   0   immed
+      0 |   12345 | View: Scroll vertically (mousewheel)         | yes     replay V   1   stream
+      0 |   12346 | View: Zoom vertically (mousewheel)           | yes     replay V   1   stream
+      0 |   12347 | View: Scroll horizontally (mousewheel)       | yes     replay H   1   stream
+      0 |   12348 | View: Zoom horizontally (mousewheel)         | yes     replay H   1   stream
+      0 |   12349 | View: Adjust selected track heights (MIDI CC | yes     replay V   1   stream
+      0 |   12350 | View: Snap to next theme-defined track heigh | yes     replay V   1   stream
+      0 |   12351 | View: Modify something (MIDI CC relative/mou | yes     replay V   1   stream
+      0 |   12352 | View: Some other thing (MIDI CC relative/mou | yes     replay V   1   stream
+      0 |   12353 | View: Scroll view vertically one page (MIDI  | REFUSE
+      0 |   12354 | View: Scroll view vertically one page revers | REFUSE
+      0 |   12355 | View: Scroll view horizontally one page (MID | REFUSE
+  32060 |   12360 | View: Scroll vertically (MIDI CC relative/mo | yes     replay V   1   step
+  32060 |   12361 | View: Zoom vertically (MIDI CC relative/mous | yes     replay V   1   immed
+  32060 |   12362 | View: Scroll horizontally (MIDI CC relative/ | yes     replay H   1   stream
+  32060 |   12363 | View: Zoom horizontally (MIDI CC relative/mo | yes     replay H   1   stream
+  32060 |   12364 | View: Some other thing (MIDI CC relative/mou | yes     replay V   1   stream
+      7 |     989 | View: Scroll vertically (MIDI CC relative/mo | REFUSE
+    999 |   12365 | View: Scroll vertically (mousewheel)         | REFUSE
