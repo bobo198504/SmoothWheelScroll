@@ -76,12 +76,12 @@ Windows x64，REAPER 7。
 * 关掉总开关即完全放行，滚轮回到 REAPER 原生行为。
 
 <p align="center">
-  <img src="test/settings-dark.gif" alt="Smooth Wheel Scroll 设置面板（深色）" width="330">
+  <img src="test/settings-dark.png" alt="Smooth Wheel Scroll 设置面板（深色）" width="330">
   &nbsp;&nbsp;
   <img src="test/settings-light.png" alt="Smooth Wheel Scroll 设置面板（浅色）" width="330">
 </p>
 <p align="center">
-  <sub>深色主题（动图：拖动滑杆，运动图与刻度实时重塑）&nbsp;·&nbsp;浅色主题</sub>
+  <sub>深色主题&nbsp;·&nbsp;浅色主题</sub>
 </p>
 
 ### 卸载
