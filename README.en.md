@@ -91,7 +91,12 @@ Changes apply live and are saved automatically.
 * Turning the master switch off passes the wheel through untouched.
 
 <p align="center">
-  <img src="test/settings.png" alt="Smooth Wheel Scroll settings panel" width="330">
+  <img src="test/settings-dark.gif" alt="Smooth Wheel Scroll settings panel (dark)" width="330">
+  &nbsp;&nbsp;
+  <img src="test/settings-light.png" alt="Smooth Wheel Scroll settings panel (light)" width="330">
+</p>
+<p align="center">
+  <sub>dark theme (animated: drag a slider and the chart and its ticks reshape live) &nbsp;·&nbsp; light theme</sub>
 </p>
 
 ### Uninstall
