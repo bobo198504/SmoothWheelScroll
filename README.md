@@ -31,9 +31,24 @@ REAPER 的滚动/缩放大多已有对应的滚轮动作（动作名含 `(MIDI C
 | MIDI 编辑器琴键 | 竖直滚动 |
 | 调音台（MCP） | 横向滚动 |
 | 名字带 `mousewheel` 的动作 | 按**动作名**匹配，因此自定义或重新绑定的快捷键同样生效 |
+| **自定义动作（Custom:）** | 由滚轮族动作组成的宏，会整体缓动（见下） |
 
 滚动条按几何识别；轨道面板与调音台按**鼠标修饰键**（`Scroll TCP` / `Scroll MCP`）判断。
 把那些组合改成别的（例如 `Passthrough`），插件就放行。
+
+### 自定义动作（组合命令）
+
+REAPER 可以把几条动作组合成一条 `Custom:` 动作。这类宏原生是**一次性整批执行**，所以滚起来一格一格跳。
+本插件改为**接管这条宏**：读它的成分，**用一条平滑动画同时驱动其中的每一条**。
+
+**条件（全部满足才接管，否则整条宏原样交给 REAPER）：**
+
+- 宏里**每一条**都必须是插件本来就会缓动的那类动作（滚轮族的滚动 / 缩放）；
+- 只要有一条不满足 —— 例如里面混了个**翻页**滚动、脚本、或**另一条宏** —— 就**整条放行**。
+  理由是宏原生**只执行一次**，而缓动会把每条动作**重放很多次**；这条是安全底线，不是保守。
+
+> ⚠️ **注意**：名字带 **`(MIDI CC/OSC only)`** 的动作**不属于**滚轮族（REAPER 标注它只给 MIDI CC / OSC 用），
+> 因此**由这类动作组成的宏不会缓动**。要缓动，请用名字带 **`(MIDI CC relative/mousewheel)`** 的动作来组合。
 
 ### 无级滚轮（自由滚动、无格）
 
@@ -58,7 +73,7 @@ Windows x64，REAPER 7。
 2. 放进 `UserPlugins`：便携版 `<REAPER>/UserPlugins/`，普通安装 `%APPDATA%\REAPER\UserPlugins\`。
 3. 重启 REAPER。
 
-加载后，扩展列表与启动日志中显示为 `Smooth Wheel Scroll 1.7.0`。
+加载后，扩展列表与启动日志中显示为 `Smooth Wheel Scroll 1.7.1`。
 
 ### 设置面板
 
@@ -125,6 +140,7 @@ Windows x64，REAPER 7。
 ./test/check_routes.sh         # 投递路由与冻结基线逐条对比
 ./test/check_classify.sh       # 分类规则改动前后对比（只允许 one page）
 ./test/check_filter.sh         # 过滤器规则（各轴的投递粒度）
+./test/check_macro.sh          # 自定义动作：解析成分 / 该拒的必须拒 / 一格分给每条
 ```
 
 ---
@@ -138,6 +154,7 @@ Windows x64，REAPER 7。
 | `src/model.h` | 模型接缝：唯一对外的模型入口 |
 | `src/routing.h` | 投递路由：哪条动作、什么粒度 |
 | `src/device.h` | 设备分类（有格 / 无级 / 触控板） |
+| `src/macro.h` | 自定义动作（`Custom:`）成分解析 |
 | `src/smooth_wheel_scroll.cpp` | REAPER 扩展：分类、喂入、投递、设置面板 |
 | `test/` | 回归门 |
 | `versions/<ver>/` | 各版本冻结快照 |

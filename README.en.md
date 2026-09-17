@@ -34,10 +34,28 @@ sizes and user-customized rules all stay as REAPER defines them.
 | MIDI editor piano keys | vertical scroll |
 | Mixer panel (MCP) | horizontal scroll |
 | Every action whose name contains `mousewheel` | matched **by action name**, so custom or re-bound keys work too |
+| **Custom actions** | a macro built from wheel-family actions is smoothed as a whole (below) |
 
 Scrollbars are found by geometry; the track and mixer panels by their **Mouse Modifier**
 (`Scroll TCP` / `Scroll MCP`). Reassign one of those combinations (say to `Passthrough`) and
 the plugin passes it through.
+
+### Custom actions (combined commands)
+
+REAPER lets you combine several actions into one `Custom:` action. Natively such a macro runs its
+whole list in one go, so the wheel moves it in jumps. This plugin takes the macro over instead: it
+reads the contents and drives **every action in it from one smooth glide**.
+
+**Conditions (all must hold, otherwise the whole macro is left to REAPER):**
+
+* **every** action inside must be one this plugin already smooths (wheel-family scroll / zoom);
+* if even one does not qualify — a **one-page** scroll, a script, or **another macro** — the **whole
+  macro** is passed through. A macro runs each action ONCE, while smoothing replays it many times;
+  that is the safety line, not caution.
+
+> ⚠️ **Note**: actions named **`(MIDI CC/OSC only)`** are **not** in the wheel family (REAPER marks
+> them for MIDI CC / OSC input), so **a macro built from those is not smoothed**. To get smoothing,
+> build the macro from actions named **`(MIDI CC relative/mousewheel)`**.
 
 ### Free-spinning wheels
 
@@ -69,7 +87,7 @@ Windows x64, REAPER 7.
    `%APPDATA%\REAPER\UserPlugins\`.
 3. Restart REAPER.
 
-Once loaded it appears as `Smooth Wheel Scroll 1.7.0` in the Extensions list and the startup log.
+Once loaded it appears as `Smooth Wheel Scroll 1.7.1` in the Extensions list and the startup log.
 
 ### Settings panel
 
@@ -142,6 +160,7 @@ Regression gates (run standalone, no REAPER needed):
 ./test/check_routes.sh         # routing against the frozen baseline, line by line
 ./test/check_classify.sh       # classification rules, before/after (only "one page" may differ)
 ./test/check_filter.sh         # the filter's delivery granularity per axis
+./test/check_macro.sh          # custom actions: parse the contents / refuse what must be refused / split one notch
 ```
 
 ---
@@ -155,6 +174,7 @@ Regression gates (run standalone, no REAPER needed):
 | `src/model.h` | the model seam: the one entry point to the models |
 | `src/routing.h` | delivery routing: which action, at what granularity |
 | `src/device.h` | device classification (notched / free-spinning / touchpad) |
+| `src/macro.h` | parsing a `Custom:` action's contents |
 | `src/smooth_wheel_scroll.cpp` | the REAPER extension: classify, feed, deliver, settings panel |
 | `test/` | the regression gates |
 | `versions/<ver>/` | frozen snapshots per release |

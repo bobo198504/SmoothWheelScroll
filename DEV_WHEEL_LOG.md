@@ -9,8 +9,8 @@
 >
 >   | | 文件名 | 扩展列表里显示 |
 >   |---|---|---|
->   | 正式版 | `reaper_smoothwheelscroll-x64.dll` | `Smooth Wheel Scroll 1.7.0` |
->   | **DEV 版** | `reaper_smoothwheelscroll-x64-DEV.dll` | `Smooth Wheel Scroll 1.7.0 DEV (wheel log)` |
+>   | 正式版 | `reaper_smoothwheelscroll-x64.dll` | `Smooth Wheel Scroll 1.7.1` |
+>   | **DEV 版** | `reaper_smoothwheelscroll-x64-DEV.dll` | `Smooth Wheel Scroll 1.7.1 DEV (wheel log)` |
 
 **English summary.** This is a **test build** of Smooth Wheel Scroll. It works like the normal one
 and additionally records your last ~50 mouse-wheel messages into a small file, so a wheel the
