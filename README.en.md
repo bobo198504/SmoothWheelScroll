@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 ![Platform: Windows x64](https://img.shields.io/badge/platform-Windows%20x64-blue)
 
-A native REAPER extension that smooths wheel-driven scrolling and zooming —
+A native REAPER extension that turns wheel-driven scrolling and zooming into a smooth animation —
 **without changing what the wheel does**.
 
 [中文说明](README.md)
@@ -12,14 +12,9 @@ A native REAPER extension that smooths wheel-driven scrolling and zooming —
   <img src="test/demo.gif" alt="Smooth Wheel Scroll demo" width="880">
 </p>
 
-REAPER already has a wheel-driven action for almost everything you would scroll or zoom
-(their names contain `(MIDI CC relative/mousewheel)`), and those actions already accept a
-smooth relative amount. This plugin intercepts one notch of a plain mouse wheel, turns it
-into an animation, and feeds the result to the **same REAPER action** in small pieces over
-time.
-
-The plugin never moves a view or changes REAPER state. Zoom anchoring, scroll ranges, step
-sizes and user-customized rules all stay as REAPER defines them.
+The plugin intercepts one notch of the wheel, turns it into an animation, and feeds the result to the
+**same REAPER action** in small pieces over time. It never moves a view or changes REAPER state: zoom
+anchoring, scroll ranges, step sizes and user-customized rules all stay as REAPER defines them.
 
 ---
 
@@ -28,53 +23,19 @@ sizes and user-customized rules all stay as REAPER defines them.
 | Surface | How |
 |---|---|
 | Main arrange view: scroll + zoom | REAPER's own actions |
-| The arrange view's two scrollbars | Vertical bar scrolls; `Alt`+wheel zooms vertically. Horizontal bar: `Alt`+wheel zooms horizontally (the no-`Alt` paging-style pan is not taken over) |
+| The arrange view's two scrollbars | vertical bar scrolls; `Alt`+wheel zooms |
 | MIDI editor: scroll + zoom | the MIDI editor section's own actions |
-| Track control panel (TCP) | follows your Mouse Modifier: default `Scroll TCP` → vertical scroll; `Adjust vertical zoom` → vertical zoom |
+| Track control panel (TCP) | follows your Mouse Modifier (`Scroll TCP` / `Adjust vertical zoom`) |
 | MIDI editor piano keys | vertical scroll |
 | Mixer panel (MCP) | horizontal scroll |
-| Every action whose name contains `mousewheel` | matched **by action name**, so custom or re-bound keys work too |
-| **Custom actions** | a macro built from wheel-family actions is smoothed as a whole (below) |
+| Actions whose name contains `mousewheel` | matched **by action name**, so custom or re-bound keys work too |
+| Custom actions (`Custom:`) | a macro built from the above is smoothed as a whole |
 
-Scrollbars are found by geometry; the track and mixer panels by their **Mouse Modifier**
-(`Scroll TCP` / `Scroll MCP`). Reassign one of those combinations (say to `Passthrough`) and
-the plugin passes it through.
+## Left alone
 
-### Custom actions (combined commands)
-
-REAPER lets you combine several actions into one `Custom:` action. Natively such a macro runs its
-whole list in one go, so the wheel moves it in jumps. This plugin takes the macro over instead: it
-reads the contents and drives **every action in it from one smooth glide**.
-
-**Conditions (all must hold, otherwise the whole macro is left to REAPER):**
-
-* **every** action inside must be one this plugin already smooths (wheel-family scroll / zoom);
-* if even one does not qualify — a **one-page** scroll, a script, or **another macro** — the **whole
-  macro** is passed through. A macro runs each action ONCE, while smoothing replays it many times;
-  that is the safety line, not caution.
-
-> ⚠️ **Note**: actions named **`(MIDI CC/OSC only)`** are **not** in the wheel family (REAPER marks
-> them for MIDI CC / OSC input), so **a macro built from those is not smoothed**. To get smoothing,
-> build the macro from actions named **`(MIDI CC relative/mousewheel)`**.
-
-### Free-spinning wheels
-
-**These go through the model too, and are not passed through**: the model works in **deltas**, so a
-notched mouse and a free-spinning wheel cover the same distance at the same hand speed.
-
-> ⚠️ **Unverified**: the author has no free-spinning wheel, so this follows from two sets of measured
-> data rather than from testing one.
-
-## What is deliberately left alone
-
-* **Parameter-type wheels.** Faders, knobs, tempo, send amounts, MIDI note velocity,
-  dropdowns and the like are passed through untouched, so they still move in exact single
-  steps.
-* **Lists.** List/tree controls move in whole rows and REAPER's native response is already
-  instant, so animating them could only add latency.
-* **Touchpads, touch, pen.** These are already continuous (the value follows the finger, with no
-  fixed step), so a second easing on top would only double-smooth. They are left to REAPER; the
-  test is Windows' touch marker plus whether the values are regular.
+* **Parameter-type wheels** — faders, knobs, tempo, send amounts, note velocity, dropdowns.
+* **Lists** — whole-row movement, already instant natively.
+* **Touchpads, touch, pen** — passed to REAPER untouched.
 
 ---
 
@@ -87,80 +48,58 @@ Windows x64, REAPER 7.
    `%APPDATA%\REAPER\UserPlugins\`.
 3. Restart REAPER.
 
-Once loaded it appears as `Smooth Wheel Scroll 1.7.1` in the Extensions list and the startup log.
+Once loaded it appears as `Smooth Wheel Scroll 1.7.1`.
 
 ### Settings panel
 
-Open it either way:
+**Extensions menu** → `SmoothScroll...`; or in the **Actions window** use
+`Smooth Wheel Scroll: settings...` (bindable to a key; press again to close). Changes apply live and
+are saved automatically.
 
-1. **Extensions menu** → `SmoothScroll...`
-2. **Actions window**: search for `Smooth Wheel Scroll` and use
-   `Smooth Wheel Scroll: settings...`; it can be bound to a key, and pressing that key again
-   closes the panel.
+* **Glide length** — how long one notch's animation takes (100–300 ms, default 200)
+* **Slow step** — how far a slow notch moves (1–10 delta, default 5)
+* **Ramp-up** — how much turning before a notch reaches full size (60–2000 delta, default 1000)
+* **Top speed** — how far past the wheel's own speed the fastest rolls may climb (1.0–2.0x, default 1.5)
+* **Master switch** — off passes the wheel through untouched
 
-The panel holds a master smoothing switch, four sliders, and a **motion chart** under them.
-Changes apply live and are saved automatically.
-
-* **Glide length** — how long one notch's animation takes (100–300 ms, default **200**).
-* **Slow step** — how far a slow notch moves, in deltas (1–10, default **5**).
-* **Ramp-up** — how much turning it takes to reach a full notch (60–2000, default **1000**).
-* **Top speed** — how far past the wheel's own speed the fastest rolls may climb
-  (1.0–2.0x, default **1.5**).
-* **The motion chart** runs a scripted roll and draws the wheel's own stepped path (dashed grey)
-  against the smooth path the plugin hands over (coloured per slider), with **one ball running
-  along it**. **Every received wheel message launches a ball** (up to six in flight). With the
-  master switch off the ball still runs — along the stepped path — so the switch's effect is
-  visible at a glance. Each of the four sliders owns one visual channel: Glide the time axis,
-  Slow step the knee's height, Ramp-up the slope, Top speed the vertical scale (the native
-  reference sits at `1/Top`, so at `Top = 1.0` the flat top rests exactly on it). The tick numbers
-  are taken from the real values, so they rescale as Glide and Top move.
-* The panel follows REAPER's light/dark state: caption, panel colour, text and scrollbar.
-* Turning the master switch off passes the wheel through untouched.
+Below the sliders is a **motion chart**: every received wheel message launches a ball along the path,
+showing what the current settings do.
 
 <p align="center">
-  <img src="test/settings-dark.png" alt="Smooth Wheel Scroll settings panel (dark)" width="330">
+  <img src="test/settings-dark.png" alt="Settings panel (dark)" width="330">
   &nbsp;&nbsp;
-  <img src="test/settings-light.png" alt="Smooth Wheel Scroll settings panel (light)" width="330">
-</p>
-<p align="center">
-  <sub>dark theme &nbsp;·&nbsp; light theme</sub>
+  <img src="test/settings-light.png" alt="Settings panel (light)" width="330">
 </p>
 
 ### Uninstall
 
-Delete the DLL and restart REAPER. Apart from the panel's parameters it writes no configuration.
+Delete the DLL and restart REAPER.
 
 ---
 
 ## Build from source
 
-One translation unit plus a few headers, built with a C++17 compiler against the REAPER SDK
-vendored in `third_party/`. The reference build uses a portable MinGW-w64 toolchain.
+A C++17 compiler against the REAPER SDK vendored in `third_party/`. The reference build uses a
+portable MinGW-w64 toolchain.
 
 ```sh
-./build.sh        # release DLL -> build/reaper_smoothwheelscroll-x64.dll
-./deploy.sh       # optional: copy it into REAPER's UserPlugins
+./build.sh        # -> build/reaper_smoothwheelscroll-x64.dll
+./deploy.sh       # optional: copy it into UserPlugins
 ```
-
-Build flags:
 
 | Flag | Effect |
 |---|---|
 | *(none)* | includes the settings panel (default) |
 | `--no-settings-ui` | compiles the settings panel out |
 | `--debug-log` | adds diagnostic logging to `%TEMP%\SmoothWheelScroll.log` |
+| `--wheel-log` | DEV build: records recent wheel messages next to the DLL, for device diagnosis |
 
 Regression gates (run standalone, no REAPER needed):
 
 ```sh
-./test/check_anim3.sh          # window model: equal parts, exact total, frame-rate independent, overlaps add
-./test/check_conservation.sh   # take N, give N -- exactly
-./test/check_travel.sh         # travel from the speed budget, device-independent
-./test/check_device.sh         # notched / free-spinning / touchpad separation
-./test/check_routes.sh         # routing against the frozen baseline, line by line
-./test/check_classify.sh       # classification rules, before/after (only "one page" may differ)
-./test/check_filter.sh         # the filter's delivery granularity per axis
-./test/check_macro.sh          # custom actions: parse the contents / refuse what must be refused / split one notch
+./test/check_anim3.sh          ./test/check_conservation.sh   ./test/check_travel.sh
+./test/check_device.sh         ./test/check_routes.sh         ./test/check_classify.sh
+./test/check_filter.sh         ./test/check_wheel_log.sh      ./test/check_macro.sh
 ```
 
 ---
@@ -169,8 +108,8 @@ Regression gates (run standalone, no REAPER needed):
 
 | File | What it is |
 |---|---|
-| `src/anim3_core.h` | the 3.0 model: windows / payout shape (pure math, no REAPER, no Windows) |
-| `src/anim161_core.h` | the 1.6.1 curve model (vertical zoom only; byte-identical to 1.6.1) |
+| `src/anim3_core.h` | the animation model (pure math, no REAPER, no Windows) |
+| `src/anim161_core.h` | the curve model used for vertical zoom |
 | `src/model.h` | the model seam: the one entry point to the models |
 | `src/routing.h` | delivery routing: which action, at what granularity |
 | `src/device.h` | device classification (notched / free-spinning / touchpad) |
@@ -185,8 +124,7 @@ Regression gates (run standalone, no REAPER needed):
 ## Limitations
 
 * Windows x64 only; macOS and Linux would each need their own window-hook implementation.
-* Free-spinning wheel support is **unverified** (the author has no such wheel; see above).
-  Touchpads and pens are not smoothed.
+* Free-spinning wheel support is unverified.
 * On a device that already smooths, you may feel both.
 
 ---

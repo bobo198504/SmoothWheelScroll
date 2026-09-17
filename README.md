@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 ![Platform: Windows x64](https://img.shields.io/badge/platform-Windows%20x64-blue)
 
-一个原生 REAPER 扩展：让普通鼠标滚轮驱动的滚动/缩放变得平滑，**不改变滚轮原本做什么**。
+一个原生 REAPER 扩展：把普通鼠标滚轮驱动的滚动/缩放变成平滑动画，**不改变滚轮原本做什么**。
 
 [English](README.en.md)
 
@@ -11,57 +11,29 @@
   <img src="test/demo.gif" alt="Smooth Wheel Scroll 效果演示" width="880">
 </p>
 
-REAPER 的滚动/缩放大多已有对应的滚轮动作（动作名含 `(MIDI CC relative/mousewheel)`），
-这些动作本身就接受平滑的相对量。本插件截住普通鼠标滚轮的一格，把它转换成一段动画，
-再**分小份、按时间交给同一条 REAPER 动作**。
-
-插件不自己移动视图、不修改 REAPER 状态。缩放锚点、滚动范围、步进大小、用户自定义规则，
-全部仍由 REAPER 决定。
+插件截住滚轮的一格，转成一段动画，再**分小份、按时间交给同一条 REAPER 动作**。
+不自己移动视图、不修改 REAPER 状态：缩放锚点、滚动范围、步进大小、自定义规则全部仍由 REAPER 决定。
 
 ---
 
-## 会做缓动的
+## 会缓动的
 
 | 表面 | 方式 |
 |---|---|
 | 主视图（arrange）：滚动 + 缩放 | REAPER 自己的动作 |
-| 主视图两条滚动条 | 竖直条滚动；`Alt`+滚轮竖直缩放。水平条 `Alt`+滚轮水平缩放（不带 `Alt` 的翻页式快移不接管） |
+| 主视图两条滚动条 | 竖直条滚动；`Alt`+滚轮缩放 |
 | MIDI 编辑器：滚动 + 缩放 | MIDI 编辑器自己的 section 动作 |
-| 轨道面板（TCP） | 遵从鼠标修饰键：默认 `Scroll TCP` → 竖直滚动；`Adjust vertical zoom` → 竖直缩放 |
+| 轨道面板（TCP） | 遵从鼠标修饰键（`Scroll TCP` / `Adjust vertical zoom`）|
 | MIDI 编辑器琴键 | 竖直滚动 |
 | 调音台（MCP） | 横向滚动 |
-| 名字带 `mousewheel` 的动作 | 按**动作名**匹配，因此自定义或重新绑定的快捷键同样生效 |
-| **自定义动作（Custom:）** | 由滚轮族动作组成的宏，会整体缓动（见下） |
-
-滚动条按几何识别；轨道面板与调音台按**鼠标修饰键**（`Scroll TCP` / `Scroll MCP`）判断。
-把那些组合改成别的（例如 `Passthrough`），插件就放行。
-
-### 自定义动作（组合命令）
-
-REAPER 可以把几条动作组合成一条 `Custom:` 动作。这类宏原生是**一次性整批执行**，所以滚起来一格一格跳。
-本插件改为**接管这条宏**：读它的成分，**用一条平滑动画同时驱动其中的每一条**。
-
-**条件（全部满足才接管，否则整条宏原样交给 REAPER）：**
-
-- 宏里**每一条**都必须是插件本来就会缓动的那类动作（滚轮族的滚动 / 缩放）；
-- 只要有一条不满足 —— 例如里面混了个**翻页**滚动、脚本、或**另一条宏** —— 就**整条放行**。
-  理由是宏原生**只执行一次**，而缓动会把每条动作**重放很多次**；这条是安全底线，不是保守。
-
-> ⚠️ **注意**：名字带 **`(MIDI CC/OSC only)`** 的动作**不属于**滚轮族（REAPER 标注它只给 MIDI CC / OSC 用），
-> 因此**由这类动作组成的宏不会缓动**。要缓动，请用名字带 **`(MIDI CC relative/mousewheel)`** 的动作来组合。
-
-### 无级滚轮（自由滚动、无格）
-
-**也走模型，不是放行**：模型按 **delta** 算，所以有格鼠标与无级滚轮在同一手速下走同样的距离。
-
-> ⚠️ **未验证**：作者手上没有无级滚轮，这一条是按两组实测数据推算的。
+| 名字带 `mousewheel` 的动作 | 按**动作名**匹配，含自定义 / 重绑的快捷键 |
+| 自定义动作（`Custom:`） | 由上述动作组成的宏，整体缓动 |
 
 ## 不做缓动的
 
-* **参数类滚轮。** 推子、旋钮、速度、发送量、MIDI 音符力度、下拉框等一律原样透传，仍一格一格精确改值。
-* **列表控件。** 整行移动，原生响应已是瞬时，加缓动只会增加延迟。
-* **触控板、触摸、触控笔。** 这类设备本身已是连续的（值跟随手指、无固定步长），再叠一层缓动只会双重缓动，
-  因此原样交给 REAPER。判据是 Windows 的触摸标记 + 值是否规整。
+* **参数类滚轮** —— 推子、旋钮、速度、发送量、力度、下拉框等原样透传。
+* **列表控件** —— 整行移动，原生已是瞬时。
+* **触控板、触摸、触控笔** —— 原样交给 REAPER。
 
 ---
 
@@ -73,74 +45,55 @@ Windows x64，REAPER 7。
 2. 放进 `UserPlugins`：便携版 `<REAPER>/UserPlugins/`，普通安装 `%APPDATA%\REAPER\UserPlugins\`。
 3. 重启 REAPER。
 
-加载后，扩展列表与启动日志中显示为 `Smooth Wheel Scroll 1.7.1`。
+加载后显示为 `Smooth Wheel Scroll 1.7.1`。
 
 ### 设置面板
 
-两种打开方式：
+**Extensions 菜单** → `SmoothScroll...`；或在 **Actions 窗口**用 `Smooth Wheel Scroll: settings...`
+（可绑快捷键，再按一次关闭）。改动即时生效、自动保存。
 
-1. **Extensions 菜单** → `SmoothScroll...`
-2. **Actions 窗口**搜 `Smooth Wheel Scroll`，用 `Smooth Wheel Scroll: settings...`；可绑定快捷键，再按一次关闭。
+* **Glide length** — 一格动画的时长（100–300 ms，默认 200）
+* **Slow step** — 慢轮一格走多少（1–10 delta，默认 5）
+* **Ramp-up** — 转多少才涨满到整格（60–2000 delta，默认 1000）
+* **Top speed** — 最快时超过自身速度的倍数（1.0–2.0×，默认 1.5）
+* **总开关** —— 关掉即完全放行，滚轮回到原生行为
 
-面板包含缓动总开关、4 个滑杆，以及滑杆下方的**运动轨迹图**。改动即时生效、自动保存。
-
-* **Glide length** — 一格动画的时长（100–300 ms，默认 **200**）。
-* **Slow step** — 慢轮一格走多少 delta（1–10，默认 **5**）。
-* **Ramp-up** — 转多少 delta 才涨满到整格（60–2000，默认 **1000**）。
-* **Top speed** — 最快时能冲到自身速度的几倍（1.0–2.0，默认 **1.5**）。
-* **运动轨迹图**：脚本化滚动跑一遍，画「滚轮自己的整步路径」（灰虚线）与「本插件给的平滑路径」
-  （按滑杆分段上色），并让**一颗球沿路径跑**。**收到一个滚轮消息就发一颗球**（最多 6 颗同时在飞）。
-  关掉总开关时球也跑，走的是整步（方块）那条 —— 一眼看出开关在做什么。
-  四个参数**各占一个视觉通道**：Glide 管时间轴、Slow step 管膝点高度、Ramp-up 管坡度、
-  Top speed 管纵轴缩放（原生参考线在 `1/Top` 处，`Top=1.0` 时顶线正好压在它上面）。
-  刻度按数值取，拉 Glide / Top 时**跟着缩放**。
-* 面板跟随 REAPER 的浅色/深色：标题栏、面板底色、文字、滚动条都会随之切换。
-* 关掉总开关即完全放行，滚轮回到 REAPER 原生行为。
+滑杆下方是**运动轨迹图**：每收到一个滚轮消息就有一颗球沿路径跑，直观显示当前设置的效果。
 
 <p align="center">
-  <img src="test/settings-dark.png" alt="Smooth Wheel Scroll 设置面板（深色）" width="330">
+  <img src="test/settings-dark.png" alt="设置面板（深色）" width="330">
   &nbsp;&nbsp;
-  <img src="test/settings-light.png" alt="Smooth Wheel Scroll 设置面板（浅色）" width="330">
-</p>
-<p align="center">
-  <sub>深色主题&nbsp;·&nbsp;浅色主题</sub>
+  <img src="test/settings-light.png" alt="设置面板（浅色）" width="330">
 </p>
 
 ### 卸载
 
-删掉 DLL，重启 REAPER。除面板参数外不写任何配置。
+删掉 DLL，重启 REAPER。
 
 ---
 
 ## 从源码构建
 
-一个翻译单元加几个头文件，用 C++17 编译器对着仓库内的 REAPER SDK（`third_party/`）编译。
-参考构建使用便携版 MinGW-w64。
+C++17 编译器，对着仓库内的 REAPER SDK（`third_party/`）编译。参考构建使用便携版 MinGW-w64。
 
 ```sh
-./build.sh        # release DLL -> build/reaper_smoothwheelscroll-x64.dll
-./deploy.sh       # 可选：复制进 REAPER 的 UserPlugins
+./build.sh        # -> build/reaper_smoothwheelscroll-x64.dll
+./deploy.sh       # 可选：复制进 UserPlugins
 ```
-
-构建参数：
 
 | 参数 | 作用 |
 |---|---|
 | *（无）* | 含设置面板（默认） |
 | `--no-settings-ui` | 不编译设置面板 |
 | `--debug-log` | 附加诊断日志（`%TEMP%\SmoothWheelScroll.log`） |
+| `--wheel-log` | DEV 版：把最近的滚轮消息记到插件同目录，用于设备排查 |
 
 回归门（脱离 REAPER 运行）：
 
 ```sh
-./test/check_anim3.sh          # 窗口模型：等分、总量精确、与帧率无关、重叠相加
-./test/check_conservation.sh   # 拿多少给多少（精确）
-./test/check_travel.sh         # 每格行程来自速度预算，且与设备无关
-./test/check_device.sh         # 有格 / 无级 / 触控板 的区分
-./test/check_routes.sh         # 投递路由与冻结基线逐条对比
-./test/check_classify.sh       # 分类规则改动前后对比（只允许 one page）
-./test/check_filter.sh         # 过滤器规则（各轴的投递粒度）
-./test/check_macro.sh          # 自定义动作：解析成分 / 该拒的必须拒 / 一格分给每条
+./test/check_anim3.sh          ./test/check_conservation.sh   ./test/check_travel.sh
+./test/check_device.sh         ./test/check_routes.sh         ./test/check_classify.sh
+./test/check_filter.sh         ./test/check_wheel_log.sh      ./test/check_macro.sh
 ```
 
 ---
@@ -149,8 +102,8 @@ Windows x64，REAPER 7。
 
 | 文件 | 内容 |
 |---|---|
-| `src/anim3_core.h` | 3.0 模型：窗口 / 付出形状（纯数学，不依赖 REAPER / Windows） |
-| `src/anim161_core.h` | 1.6.1 曲线模型（竖直缩放用，与 1.6.1 逐字节相同） |
+| `src/anim3_core.h` | 动画模型（纯数学，不依赖 REAPER / Windows） |
+| `src/anim161_core.h` | 竖直缩放用的曲线模型 |
 | `src/model.h` | 模型接缝：唯一对外的模型入口 |
 | `src/routing.h` | 投递路由：哪条动作、什么粒度 |
 | `src/device.h` | 设备分类（有格 / 无级 / 触控板） |
@@ -165,7 +118,7 @@ Windows x64，REAPER 7。
 ## 限制
 
 * 仅 Windows x64；macOS / Linux 需要各自的窗口钩子实现。
-* 无级滚轮的支持**未经实机验证**（作者没有该类鼠标，见上文）。触控板/触控笔不做缓动。
+* 无级滚轮的支持未经实机验证。
 * 设备本身已带惯性时，可能感到双重缓动。
 
 ---
