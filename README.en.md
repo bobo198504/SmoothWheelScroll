@@ -18,9 +18,9 @@ anchoring, scroll ranges, step sizes and user-customized rules all stay as REAPE
 
 ---
 
-## What is smoothed
+## Smoothing events supported
 
-| Surface | How |
+| Event | How |
 |---|---|
 | Main arrange view: scroll + zoom | REAPER's own actions |
 | The arrange view's two scrollbars | vertical bar scrolls; `Alt`+wheel zooms |
@@ -28,10 +28,10 @@ anchoring, scroll ranges, step sizes and user-customized rules all stay as REAPE
 | Track control panel (TCP) | follows your Mouse Modifier (`Scroll TCP` / `Adjust vertical zoom`) |
 | MIDI editor piano keys | vertical scroll |
 | Mixer panel (MCP) | horizontal scroll |
-| Actions whose name contains `mousewheel` | matched **by action name**, so custom or re-bound keys work too |
+| Actions whose name contains `mousewheel` | matched **by action name**, so custom or re-bound keys work too (**except special ones, e.g. page scrolling**) |
 | Custom actions (`Custom:`) | a macro built from the above is smoothed as a whole |
 
-## Left alone
+## Events passed through natively
 
 * **Parameter-type wheels** — faders, knobs, tempo, send amounts, note velocity, dropdowns.
 * **Lists** — whole-row movement, already instant natively.
