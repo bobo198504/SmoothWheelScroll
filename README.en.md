@@ -23,7 +23,7 @@ anchoring, scroll ranges, step sizes and user-customized rules all stay as REAPE
 | Event | How |
 |---|---|
 | Actions whose name contains `mousewheel` | matched **by action name**, so custom or re-bound keys work too (**except special ones, e.g. page scrolling**) |
-| Custom actions (`Custom:`) | a macro built from the above is smoothed as a whole |
+| Custom actions | a macro built from the above is smoothed as a whole |
 
 ## Events passed through natively
 
@@ -107,7 +107,7 @@ Regression gates (run standalone, no REAPER needed):
 | `src/model.h` | the model seam: the one entry point to the models |
 | `src/routing.h` | delivery routing: which action, at what granularity |
 | `src/device.h` | device classification (notched / free-spinning / touchpad) |
-| `src/macro.h` | parsing a `Custom:` action's contents |
+| `src/macro.h` | parsing a custom action's contents |
 | `src/smooth_wheel_scroll.cpp` | the REAPER extension: classify, feed, deliver, settings panel |
 | `test/` | the regression gates |
 | `versions/<ver>/` | frozen snapshots per release |
