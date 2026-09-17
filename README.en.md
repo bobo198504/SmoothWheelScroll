@@ -39,6 +39,14 @@ Scrollbars are found by geometry; the track and mixer panels by their **Mouse Mo
 (`Scroll TCP` / `Scroll MCP`). Reassign one of those combinations (say to `Passthrough`) and
 the plugin passes it through.
 
+### Free-spinning wheels
+
+**These go through the model too, and are not passed through**: the model works in **deltas**, so a
+notched mouse and a free-spinning wheel cover the same distance at the same hand speed.
+
+> ⚠️ **Unverified**: the author has no free-spinning wheel, so this follows from two sets of measured
+> data rather than from testing one. If it misbehaves, see "Diagnostics (the DEV build)" below.
+
 ## What is deliberately left alone
 
 * **Parameter-type wheels.** Faders, knobs, tempo, send amounts, MIDI note velocity,
@@ -46,8 +54,9 @@ the plugin passes it through.
   steps.
 * **Lists.** List/tree controls move in whole rows and REAPER's native response is already
   instant, so animating them could only add latency.
-* **Touchpads, touch, high-resolution/free-spinning wheels, pen.** Only a plain notched mouse
-  wheel is handled (a whole `WHEEL_DELTA` multiple, not touch-injected).
+* **Touchpads, touch, pen.** These are already continuous (the value follows the finger, with no
+  fixed step), so a second easing on top would only double-smooth. They are left to REAPER; the
+  test is Windows' touch marker plus whether the values are regular.
 
 ---
 
@@ -98,6 +107,22 @@ Changes apply live and are saved automatically.
 <p align="center">
   <sub>dark theme &nbsp;·&nbsp; light theme</sub>
 </p>
+
+### Diagnostics (the DEV build)
+
+If a **free-spinning wheel** or a **touchpad** misbehaves, run the **DEV build** once: it records
+your recent wheel parameters, and sending that record back is what makes the problem findable.
+
+* **File name**: `reaper_smoothwheelscroll-x64-DEV.dll` — it shows up in the Extensions list as
+  `… 1.7.0 DEV (wheel log)`.
+* **Use it INSTEAD of the release build, never both.** Two DLLs in `UserPlugins` would animate every
+  wheel twice.
+* The record is written **next to the DLL** (in `UserPlugins`):
+  `SmoothWheelScroll_wheel_log.txt`. It is overwritten as you scroll and never grows. It contains
+  **no** project paths, track names, media or REAPER preferences, so you can open and read it before
+  sending it.
+
+Full steps: [DEV_WHEEL_LOG.md](DEV_WHEEL_LOG.md).
 
 ### Uninstall
 

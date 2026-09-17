@@ -4,15 +4,35 @@
 并把设置面板重做成 **4 个滑杆 + 运动轨迹图**。这是 1.6.1 之后的第一次公开发布。
 
 DLL md5 `bdae1612816c6dd5d3a921f148bf1a74`
+DEV（滚轮记录版）DLL md5 `da88af0c616edfc9cc9b0ea49165877d`
 
 | 文件 | md5 |
 |---|---|
-| `smooth_wheel_scroll.cpp` | `22c1d5627f335f0bbc6473f107529667` |
+| `smooth_wheel_scroll.cpp` | `213009cfd8815f881fdd210893d79ceb` |
 | `anim3_core.h` | `8d2231cef1e3d70860ea30290198d40e` |
 | `anim161_core.h` | `d785d9371295448461a033bb1efd179e`（与 1.6.1 **逐字节相同**） |
 | `model.h` | `ff6fecfe0105c0f338ada982412866c5` |
 | `routing.h` | `24150782d55af10b66b752c108c653e2` |
 | `device.h` | `6ebb98b9a5675d2515f47ffb4bb76618` |
+| `wheel_log.h` | `1f9df7f2cdec697913ed1be6ac964b24`（DEV 版专用，正式版不编入） |
+
+---
+
+## DEV 版（`--wheel-log`）：给没有的设备抓真实参数
+
+**它是什么**：同一份代码，多编一个 `SWS_WHEEL_LOG` 开关，把**每一条** `WM_MOUSEWHEEL` 记进一个
+**50 条环形缓冲**，写在**插件同目录**（`UserPlugins\SmoothWheelScroll_wheel_log.txt`）。
+**存在理由**：无级滚轮与触控板是靠"值是否规整 + 发多快"区分的，而**作者没有无级滚轮**
+（见上面那条"未验证"），必须有真实设备的值才能把这把锁校准。
+
+- **与正式版二选一**：两个 DLL 都装会让每个滚轮被处理两次。文件名与 `ext_name` 都不同
+  （`reaper_smoothwheelscroll-x64-DEV.dll` / `Smooth Wheel Scroll 1.7.0 DEV (wheel log)`）以便区分。
+- **`wheel_log.h` 不含 REAPER**，由 `_diag/wheel_log_probe.cpp` 与门 `check_wheel_log.sh` 在主机外验证
+  （重点是**环形回绕后的顺序** —— 顺序错了，报告读反，用户一趟白跑）。
+- **路径只用 `GetModuleFileNameA(g_hInst, …)`**（本插件自己的模块目录，便携/安装一致），
+  **无兜底** —— `GetModuleHandleA(nullptr)` 会指向 REAPER 自己，那才是越权。
+- **出货版零足迹**：调用点全部 `#ifdef` 包住，**实测正式版 DLL 与不含本功能时逐字节相同**。
+
 
 ---
 

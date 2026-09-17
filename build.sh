@@ -17,6 +17,7 @@ DLL="$OUT/reaper_smoothwheelscroll-x64.dll"
 mkdir -p "$OUT"
 
 DEFS=()
+DEV=0
 for arg in "$@"; do
   case "$arg" in
     # Compile-time switch for the diagnostic logging (writes to %TEMP%).
@@ -24,9 +25,26 @@ for arg in "$@"; do
     # Compile the settings window OUT. The window is part of the normal build (the
     # plugin ships a settings entry); pass this only to build a headless DLL.
     --no-settings-ui) DEFS+=(-DSWS_NO_SETTINGS_UI) ;;
+    # DEV BUILD: append a research log of recent wheel messages next to the DLL, so a tester on
+    # hardware we do not have (a free-spinning wheel, a touchpad) can send their real values back.
+    # NEVER in a release build -- see the note by the wheel log in the source.
+    # It also gets its OWN FILE NAME on purpose. The two builds are alternatives, not companions
+    # (running both would install two hooks and animate every wheel twice), so they must not be
+    # able to sit in UserPlugins under one name and silently overwrite or double up.
+    --wheel-log) DEFS+=(-DSWS_WHEEL_LOG) ; DEV=1 ;;
     *) echo "unknown build option: $arg" >&2; exit 2 ;;
   esac
 done
+
+# One name per kind of build. The release name is what REAPER users expect to see; the DEV name is
+# deliberately different so the two cannot be confused in UserPlugins.
+if [ "$DEV" = "1" ]; then
+  DLL="$OUT/reaper_smoothwheelscroll-x64-DEV.dll"
+else
+  DLL="$OUT/reaper_smoothwheelscroll-x64.dll"
+fi
+echo "== target =="
+echo "$DLL"
 
 echo "== g++ =="
 g++ --version | head -1

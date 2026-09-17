@@ -77,6 +77,11 @@
 // wheel). This is how the panel rules avoid hijacking a gesture the user has rebound:
 // see TcpWheelIsPlainScroll.
 #define REAPERAPI_WANT_GetMouseModifier
+// The DEV wheel log (SWS_WHEEL_LOG) stamps the test machine's REAPER version into the file, so a
+// report can be read in context. Nothing else uses it.
+#ifdef SWS_WHEEL_LOG
+#define REAPERAPI_WANT_GetAppVersion
+#endif
 // The mixer needs NO API. Its only official interface, SetMixerScroll, takes a TRACK -- so it
 // cannot express anything finer than a whole track, and using it produced exactly that
 // visible stepping. The animated travel is instead handed to REAPER's own mixer window as a
@@ -394,6 +399,10 @@ static const DWORD kWheelFlagMs = 250;   // wheel->action latch validity window
 
 // ---------------------------------------------------------------------------
 // Debug logging (compile-time gate)
+//
+// Kept SEPARATE from the DEV wheel log on purpose. The wheel log's own build must not drag in the
+// per-wheel verbose logging (it is heavy and would fill %TEMP% for no reason); the two switches are
+// independent and can be combined if someone wants both.
 // ---------------------------------------------------------------------------
 #ifdef SWS_DEBUG_LOG
 static const bool kDebugLog = true;
@@ -2313,6 +2322,161 @@ static bool IsAnimatableWheel(int delta)
   return kind == Device::kNotched || kind == Device::kFreeSpin;
 }
 
+// ---------------------------------------------------------------------------
+// DEV WHEEL LOG -- compile-time only (SWS_WHEEL_LOG, i.e. ./build.sh --wheel-log)
+//
+// A research build. The device classifier's thresholds in device.h are a first cut that has never
+// been checked against real hardware (there is no free-spinning wheel here to check them with), so
+// this build records what the wheel actually sends and lets a tester send the file back.
+//
+// The ring, the per-verdict tally and the file's text live in src/wheel_log.h, which has no REAPER
+// in it and is exercised by _diag/wheel_log_probe.cpp -- the ring's ORDER is the whole point of the
+// file, so it is the part worth testing outside the host (see that header). What is left HERE is
+// the machine-specific part: where the file goes, what the clock says, and the header block.
+//
+// The file lands next to the DLL:
+//
+//     <the plugin's OWN FOLDER>\SmoothWheelScroll_wheel_log.txt
+//
+// It is written when a gesture ends (and at most once a second), and again when the plugin unloads,
+// so it always holds the last few messages and can never grow.
+//
+// WHAT IT DELIBERATELY DOES NOT CONTAIN: no project paths, track names, media or REAPER
+// preferences -- only wheel values, key state, window class names and the settings. That is stated
+// inside the file, because the file is meant to be handed to someone else.
+//
+// THE RELEASE BUILD HAS NONE OF THIS: the whole block compiles out, so a shipped DLL cannot write
+// a file. (Writing into the REAPER install is otherwise confined to the plugin DLL itself, see
+// AGENTS.md 5 -- this is a deliberate, user-requested exception for the DEV build only.)
+// ---------------------------------------------------------------------------
+#ifdef SWS_WHEEL_LOG
+#include "wheel_log.h"
+
+static WheelLog g_wheelLog;
+static double g_wheelLogStart;
+static DWORD g_wheelLogLastFlushMs;
+static bool g_wheelLogReady;
+
+// The plugin's own folder. GetModuleFileName on OUR instance gives the DLL's path, which is the
+// only reliable way to find "the folder this plugin lives in" -- the current directory is REAPER's,
+// which is not the same thing.
+static void WheelLogInit()
+{
+  if (g_wheelLogReady)
+    return;
+  // THE DLL'S OWN FOLDER, and nothing else. Two notes on why this is written the way it is:
+  //
+  //   * `g_hInst` is OUR module handle (handed to the entry point), so the directory that comes out
+  //     is the one the plugin actually sits in -- identical for a portable install and an installed
+  //     one, because both are just "the folder this DLL is in".
+  //   * There is deliberately NO fallback when it is null. `GetModuleHandleA(nullptr)` would return
+  //     REAPER'S OWN module, i.e. the log would land in the REAPER install directory rather than in
+  //     UserPlugins -- exactly the write this feature is not allowed to make. If the handle is not
+  //     known, the log is simply not written.
+  if (!g_hInst)
+    return;
+  char mod[MAX_PATH] = {0};
+  const DWORD n = GetModuleFileNameA(g_hInst, mod, MAX_PATH);
+  if (n == 0 || n >= MAX_PATH)
+    return;
+  char *slash = strrchr(mod, '\\');
+  if (!slash)
+    return;
+  *slash = 0; // now `mod` is the folder
+  char path[MAX_PATH], tmp[MAX_PATH];
+  _snprintf(path, sizeof(path), "%s\\SmoothWheelScroll_wheel_log.txt", mod);
+  _snprintf(tmp, sizeof(tmp), "%s\\SmoothWheelScroll_wheel_log.tmp", mod);
+  g_wheelLog.Init(path, tmp);
+  g_wheelLogStart = Now();
+  // `Ready()` is false when the folder refuses writes. That is worth SAYING rather than leaving as
+  // "no file ever appears": the folder the user just dropped the DLL into is normally writable, but
+  // a REAPER under Program Files may not be, and a silent nothing would read as a broken plugin.
+  if (g_wheelLog.PathKnownButReadOnly())
+    Log("wheel log: CANNOT WRITE %s (folder is read-only for this user)", path);
+  else if (g_wheelLog.Ready())
+    Log("wheel log -> %s", path);
+  g_wheelLogReady = true;
+}
+
+// The file's comment block. Built at write time so the timestamp is current.
+static void WheelLogHeader(char *out, int outSize)
+{
+  SYSTEMTIME st;
+  GetLocalTime(&st);
+  int off = 0;
+  off += _snprintf(out + off, outSize - off,
+                   "# SmoothWheelScroll wheel log (DEV build)\n"
+                   "# THIS FILE IS MEANT TO BE SHARED. It records, for recent mouse-wheel messages:\n"
+                   "# how long after the previous one it arrived, the raw delta the device reported,\n"
+                   "# the message's key state and extra-info word, the window CLASS under the cursor,\n"
+                   "# what the plugin decided the device was, and whether it animated the message.\n"
+                   "# It contains NO project paths, track names, media or REAPER preferences.\n"
+                   "#\n"
+                   "# written  : %04d-%02d-%02d %02d:%02d:%02d\n",
+                   st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+  if (off < 0 || off >= outSize)
+    return;
+  {
+    char rv[64] = {0};
+    if (GetAppVersion)
+    {
+      const char *v = GetAppVersion();
+      _snprintf(rv, sizeof(rv), "%s", v ? v : "?");
+    }
+    else
+      _snprintf(rv, sizeof(rv), "?");
+    HDC dc = GetDC(nullptr);
+    const int dpi = dc ? GetDeviceCaps(dc, LOGPIXELSX) : 0;
+    if (dc)
+      ReleaseDC(nullptr, dc);
+    off += _snprintf(out + off, outSize - off, "# reaper   : %s\n# windows  : dpi=%d\n", rv, dpi);
+  }
+  if (off < 0 || off >= outSize)
+    return;
+  off += _snprintf(out + off, outSize - off,
+                   "# settings : Glide length=%.0fms  Slow step=%.1fd  Ramp-up=%.0fd  Top speed=%.2fx"
+                   "  smoothing=%s  touchpad-reverse=%s\n#\n",
+                   g_windowMs, g_startDeltas, g_budgetDeltas, g_speedMul, g_glideOn ? "on" : "off",
+                   g_touchpadReverse ? "on" : "off");
+  (void)off;
+}
+
+static void WheelLogFlush()
+{
+  if (!g_wheelLogReady)
+    return;
+  char header[1024];
+  WheelLogHeader(header, (int)sizeof(header));
+  g_wheelLog.Flush(header);
+}
+
+static void WheelLogRecord(int delta, unsigned key, long extra, const char *wincls, Device dev,
+                          bool anim)
+{
+  if (!g_wheelLogReady)
+    return;
+  WheelLogRec r;
+  ZeroMemory(&r, sizeof(r));
+  r.delta = delta;
+  r.key = key;
+  r.extra = extra;
+  _snprintf(r.wincls, sizeof(r.wincls), "%s", wincls ? wincls : "");
+  r.dev = (int)dev;
+  r.anim = anim ? 1 : 0;
+
+  const bool gestureEnded = g_wheelLog.Record(r, Now() - g_wheelLogStart);
+
+  // Write at the end of a gesture, and otherwise at most once a second, so the file is never more
+  // than a second behind what has been scrolled -- without writing on every message.
+  const DWORD tick = GetTickCount();
+  if (gestureEnded || (tick - g_wheelLogLastFlushMs) > 1000)
+  {
+    g_wheelLogLastFlushMs = tick;
+    WheelLogFlush();
+  }
+}
+#endif // SWS_WHEEL_LOG
+
 static LRESULT CALLBACK GetMsgProc(int code, WPARAM wParam, LPARAM lParam)
 {
   // Our own mixer wheel is sent with SendMessage, which goes straight to the window procedure
@@ -2337,7 +2501,24 @@ static LRESULT CALLBACK GetMsgProc(int code, WPARAM wParam, LPARAM lParam)
 
       // WHICH DEVICE: the two wheels go through the model (3.0), a touchpad is left to REAPER.
       // The latch is cleared for a pass-through so the action path stays out of it too.
-      if (!IsAnimatableWheel(delta))
+      const bool animatable = IsAnimatableWheel(delta);
+
+#ifdef SWS_WHEEL_LOG
+      // THE DEV LOG. Recorded here, BEFORE the pass-through return below, because a wheel that is
+      // left to REAPER is exactly as interesting as one that is animated -- a touchpad's values are
+      // what tells the two apart, and the verdict just computed is part of the record. Every wheel
+      // the hook sees lands in this call. Guarded at the CALL SITE as well as around the
+      // definitions, so a release build contains none of it (not even a call to an empty stub).
+      {
+        char lcls[64] = {0};
+        if (under)
+          GetClassNameA(under, lcls, sizeof(lcls));
+        WheelLogRecord(delta, (unsigned)(m->wParam & 0xFFFF), (long)GetMessageExtraInfo(), lcls,
+                       LastWheelDevice(), animatable);
+      }
+#endif
+
+      if (!animatable)
       {
         InterlockedExchange(&g_wheelTick, 0);
         return CallNextHookEx(g_msgHook, code, wParam, lParam);
@@ -5330,6 +5511,9 @@ static void OnTimer()
 // ---------------------------------------------------------------------------
 static void OnExit()
 {
+#ifdef SWS_WHEEL_LOG
+  WheelLogFlush(); // the DEV log: one last write, so the file holds the very latest messages
+#endif
   RemoveAll();
 }
 
@@ -5408,13 +5592,27 @@ extern "C" __declspec(dllexport) int ReaperPluginEntry(HINSTANCE hInst, reaper_p
 
   // Reported to REAPER (and shown in its Extensions list). Keep in step with the
   // version in versions/ and the GitHub release tag.
+  // The DEV build names itself distinctly. The two builds are alternatives (see build.sh): if both
+  // were somehow loaded they would each install a hook and animate every wheel twice, so the name
+  // has to make it obvious which one REAPER is running -- both in the Extensions list and in a
+  // user's screenshot, which is often all we get.
+#ifdef SWS_WHEEL_LOG
+  rec->Register("ext_name", (void *)"Smooth Wheel Scroll 1.7.0 DEV (wheel log)");
+#else
   rec->Register("ext_name", (void *)"Smooth Wheel Scroll 1.7.0");
+#endif
   rec->Register("ext_vendor", (void *)"SmoothWheelScroll");
 
   // Load the saved feel before anything uses it. If the master switch was off, the
   // hook still gets installed (see InstallHook) so it can be switched back on at
   // runtime, and until then every wheel is forwarded untouched.
   LoadSettings();
+
+#ifdef SWS_WHEEL_LOG
+  // The DEV wheel log's path is derived from the DLL's own location, so its writer has it before
+  // any wheel can arrive. Compiled out entirely in a release build.
+  WheelLogInit();
+#endif
 
   // Windows' default timer granularity is ~15.6 ms, coarser than g_releaseMs, so
   // the release would land as a single late step and wheel-to-wheel timing would

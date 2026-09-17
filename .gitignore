@@ -21,6 +21,11 @@ _diag/*.bat
 _diag/*.exe
 _diag/*.exe.stackdump
 
+# The DEV build's wheel log (--wheel-log). It is written next to the DLL and is a test
+# artefact, so it must never be committed.
+SmoothWheelScroll_wheel_log.txt
+SmoothWheelScroll_wheel_log.tmp
+
 # REAPER creates these next to any project it opens
 media/
 recordtmp/
