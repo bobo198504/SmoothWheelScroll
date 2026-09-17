@@ -22,12 +22,6 @@ anchoring, scroll ranges, step sizes and user-customized rules all stay as REAPE
 
 | Event | How |
 |---|---|
-| Main arrange view: scroll + zoom | REAPER's own actions |
-| The arrange view's two scrollbars | vertical bar scrolls; `Alt`+wheel zooms |
-| MIDI editor: scroll + zoom | the MIDI editor section's own actions |
-| Track control panel (TCP) | follows your Mouse Modifier (`Scroll TCP` / `Adjust vertical zoom`) |
-| MIDI editor piano keys | vertical scroll |
-| Mixer panel (MCP) | horizontal scroll |
 | Actions whose name contains `mousewheel` | matched **by action name**, so custom or re-bound keys work too (**except special ones, e.g. page scrolling**) |
 | Custom actions (`Custom:`) | a macro built from the above is smoothed as a whole |
 
