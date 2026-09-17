@@ -45,7 +45,7 @@ the plugin passes it through.
 notched mouse and a free-spinning wheel cover the same distance at the same hand speed.
 
 > ⚠️ **Unverified**: the author has no free-spinning wheel, so this follows from two sets of measured
-> data rather than from testing one. If it misbehaves, see "Diagnostics (the DEV build)" below.
+> data rather than from testing one.
 
 ## What is deliberately left alone
 
@@ -108,22 +108,6 @@ Changes apply live and are saved automatically.
   <sub>dark theme &nbsp;·&nbsp; light theme</sub>
 </p>
 
-### Diagnostics (the DEV build)
-
-If a **free-spinning wheel** or a **touchpad** misbehaves, run the **DEV build** once: it records
-your recent wheel parameters, and sending that record back is what makes the problem findable.
-
-* **File name**: `reaper_smoothwheelscroll-x64-DEV.dll` — it shows up in the Extensions list as
-  `… 1.7.0 DEV (wheel log)`.
-* **Use it INSTEAD of the release build, never both.** Two DLLs in `UserPlugins` would animate every
-  wheel twice.
-* The record is written **next to the DLL** (in `UserPlugins`):
-  `SmoothWheelScroll_wheel_log.txt`. It is overwritten as you scroll and never grows. It contains
-  **no** project paths, track names, media or REAPER preferences, so you can open and read it before
-  sending it.
-
-Full steps: [DEV_WHEEL_LOG.md](DEV_WHEEL_LOG.md).
-
 ### Uninstall
 
 Delete the DLL and restart REAPER. Apart from the panel's parameters it writes no configuration.
@@ -181,7 +165,9 @@ Regression gates (run standalone, no REAPER needed):
 ## Limitations
 
 * Windows x64 only; macOS and Linux would each need their own window-hook implementation.
-* Plain notched mouse wheels only. On a device that already smooths, you may feel both.
+* Free-spinning wheel support is **unverified** (the author has no such wheel; see above).
+  Touchpads and pens are not smoothed.
+* On a device that already smooths, you may feel both.
 
 ---
 
