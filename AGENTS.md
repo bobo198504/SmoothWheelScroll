@@ -42,6 +42,52 @@
   在文档里用 `## 修复：xxx` 之类的小节标题区分，**不要长得像版本**。
   （此错犯过：`versions/1.3.9/MODEL.md` 曾被我写成 `1.3.9.1`…`1.3.9.8`，已更正。）
 
+### ★ 两个产品：命名与发布（用户决定，2026-09-18）
+
+**这个仓库从此承载两个产品**，不再是单一插件：
+
+| | 产品显示名 | 说明 |
+|---|---|---|
+| **插件** | `Smooth Wheel Scroll for REAPER` | `for REAPER` **只属于插件**；它跑在 REAPER 进程里 |
+| **独立应用** | `Smooth Wheel Scroll` | 全局接管（含 REAPER 之外的任何程序） |
+
+**仓库名（用户要求，已执行）**：由 `SmoothWheelScroll-REAPER` 改为 **`SmoothWheelScroll`**
+（`https://github.com/bobo198504/SmoothWheelScroll`）。旧地址 GitHub 会自动重定向。
+
+**tag 命名（用户决定：不加前缀，靠 Release 标题区分）—— 但插件已占号，故 app 必须加前缀**：
+
+- **插件**：**继续裸 `v1.7.2`**（`v1.3.6 … v1.7.1` 全部不动，插件用户无感）。
+- **app**：**`app-v0.1.0`、`app-v0.2.0`…**。
+  ⚠️ **为什么必须加**：git tag 是**单一命名空间**，插件已占 `v1.0.0`…`v1.7.1`；
+  app 走到 `v1.0.0` 会**直接撞号、tag 建不出来**。所以"不加前缀"只能短期成立。
+- 上面那条"tag 必须纯三段"的规范，**只约束插件**；app 用 `app-v` 前缀，前缀不算版本号。
+
+**发布方式**：**单 `main`**，**按产品各自打 tag**，互不牵动 —— 插件有改动就打插件 tag，
+app 有改动就打 app tag，**不必一起更新**。（**不用长期分支**：tag 本身就是发布隔离，
+而分支会让共享模型的每次改动都要 merge 两次。）
+
+**目录布局**：**插件继续 `versions/<ver>/`（已有 15 个目录一个都不搬）**；
+**app 用 `versions/app/<ver>/`**。
+
+**插件侧不得因本决定改动**：`ext_name`（`Smooth Wheel Scroll 1.7.1`）**不改**（用户认的是它）；
+已发布 tag **一个都不动**；`versions/<ver>/` **不得就地修改**。
+
+### ★ 工程纪律：模块化 / 接口化 / 最小改动（用户要求，2026-09-18）
+
+> 用户原话：**"接下来的开发，一样要模块化，接口化，每次细分升级或某个功能改写做到改尽量少的代码。"**
+
+1. **模块化**：一文件一职责。`app/` 按 `platform / capture / targets / core / ui / config` 分家。
+2. **接口化**：跨边界**只走接口头** —— 平台差异走 `app/platform.h`，模型**只走 `model.h`**；
+   **不许摸对方内部**。
+3. **最小改动**：每次升级**尽量少改、最好只动一个文件**。**插件 `src/` 冻结**，新功能一律进 `app/`。
+4. **改模型必跑门**：动那 4 个共享模型头（`model.h`/`anim3_core.h`/`anim161_core.h`/`device.h`）
+   就跑插件 **9 扇门**；`app/` 自己的功能配 `test/check_app_*.sh`。
+5. **一个功能一个提交**；发布照 `versions/` 惯例建快照。
+6. **★ 模型单一源，禁止平行重写**：模型是**一份纯 C++ 头**，插件 / app / 未来平台端口
+   **都编译同一份**。反例（已发生）：兄弟项目 `D:\Projects\Code\SmoothWheelScroll`（WPF）
+   用"重写一份 C#"的方式共享模型，**已漂移**（它停在 1.1.0，插件已是 3.0）。
+   将来非 C++ 宿主应**导出 C ABI 供 P/Invoke**，**不要再抄一份实现**。
+
 ### 其它纪律
 
 - **用户已经否决过的事，不要再提第二次**，除非出现**新证据**使该选项变了性质。
@@ -509,7 +555,8 @@ DLL md5 `d293678f254466bd6bc628377477b0ad`。
 - `build.sh` 现在按参数编译：默认 / `--tuning-ui` / `--debug-log`，未知参数报错退出。
 - 版本号写进 `ext_name`：`Smooth Wheel Scroll 1.3.6`。
 - 模型**零改动**（`anim_core.h` 仍与 1.0.0 逐字节相同，单格 1.89）。
-- 仓库：https://github.com/bobo198504/SmoothWheelScroll-REAPER，MIT，Release `v1.3.6`。
+- 仓库：https://github.com/bobo198504/SmoothWheelScroll，MIT，Release `v1.3.6`。
+  （**2026-09-18 改名**：原 `SmoothWheelScroll-REAPER` → `SmoothWheelScroll`，旧地址自动重定向。见 §0 两个产品。）
 - **`third_party/reaper-sdk-git` 去掉内嵌 `.git` 后作为普通文件随仓库附带**（否则会变成坏
   gitlink，克隆后无法构建）。构建只依赖 `third_party/`，不需要联网。
 
