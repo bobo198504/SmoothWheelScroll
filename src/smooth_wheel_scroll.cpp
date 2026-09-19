@@ -33,7 +33,6 @@
 
 #include <windows.h>
 #include <windowsx.h> // GET_X_LPARAM / GET_Y_LPARAM for the right-click menu
-#include <commctrl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
@@ -41,8 +40,6 @@
 #include <string.h>
 #include <ctype.h>
 #include <mmsystem.h>
-
-#pragma comment(lib, "winmm")
 
 // ---------------------------------------------------------------------------
 // REAPER API surface (minimal set)
@@ -3677,7 +3674,6 @@ static RECT g_groupRect = {0, 0, 0, 0}; // the whole block, drawn as ONE outer f
 static HBRUSH g_cardBrush = nullptr;
 static HBRUSH g_lineBrush = nullptr;
 static HBRUSH g_gridBrush = nullptr; // faint ticks inside the curve
-static RECT g_headRect = {0, 0, 0, 0};
 static RECT g_sepRect = {0, 0, 0, 0}; // thin rule under the master switch
 static bool g_hasCards = false;
 // (Re)create the three solid brushes from the current theme colours. Kept in one place
@@ -4355,10 +4351,6 @@ static LRESULT CALLBACK FaderProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
 // One knob's spec: where its value lives and the range it covers. The type itself and the
 // arrays it fills are declared up with the sliders, so the value mapping can use them.
 
-// The knob's slot in the curve's joint array: [0] is the Start knob, then Accel/Hold/Coast/
-// Release, i.e. the same order. Kept as a function so the two never drift apart.
-static int KnobCurveSlot(int knobIdx) { return knobIdx; }
-
 static double KnobValue(int i)
 {
   const KnobSpec &k = g_knobs[i];
@@ -4738,7 +4730,6 @@ static void LayoutControls(HWND h)
   RECT rc;
   GetClientRect(h, &rc);
   const int w = rc.right;
-  const int cw = w - m.pad * 2;
 
   // Vertical: the rows keep their compact spacing and start at the top. The panel is
   // NOT stretched to fill a taller window (the groups would drift apart and lose their

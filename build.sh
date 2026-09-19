@@ -55,7 +55,7 @@ g++ -std=c++17 -O2 -shared -static -static-libgcc -static-libstdc++ \
   -I"$SDK" \
   "$SRC" \
   -o "$DLL" \
-  -luser32 -lgdi32 -lole32 -lwinmm -lcomctl32
+  -luser32 -lgdi32 -lwinmm
 
 echo "== built =="
 ls -l "$DLL"
