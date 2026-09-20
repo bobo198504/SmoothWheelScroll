@@ -39,7 +39,7 @@ Windows x64，REAPER 7。
 2. 放进 `UserPlugins`：便携版 `<REAPER>/UserPlugins/`，普通安装 `%APPDATA%\REAPER\UserPlugins\`。
 3. 重启 REAPER。
 
-加载后显示为 `Smooth Wheel Scroll 1.7.1`。
+加载后显示为 `Smooth Wheel Scroll 1.7.2`。
 
 ### 设置面板
 
