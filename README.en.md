@@ -42,7 +42,7 @@ Windows x64, REAPER 7.
    `%APPDATA%\REAPER\UserPlugins\`.
 3. Restart REAPER.
 
-Once loaded it appears as `Smooth Wheel Scroll 1.7.2`.
+Once loaded it appears as `Smooth Wheel Scroll 1.7.3`.
 
 ### Settings panel
 

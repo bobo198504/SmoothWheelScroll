@@ -2,13 +2,16 @@
 # Gate: the "Custom:" macro path, END TO END.
 #
 #   1. _diag/macro_parse_probe.cpp -- the ACT line parser over lines copied from reaper-kb.ini.
-#   2. _diag/macro_gate_probe.cpp  -- which children the macro rule accepts and, more importantly,
-#      which it MUST refuse: a "one page" scroll (jumps a whole page per call, ignores the value
-#      handed in -- AGENTS.md 19.8), a script, a nested macro, a plain non-wheel "View:" action.
-#      Accepting any of those would animate something that must run once.
+#   2. _diag/macro_gate_probe.cpp  -- what each child of a macro BECOMES (AGENTS.md 125): a view wheel
+#      action is DRIVABLE and gets animated; anything else (an SWS mode toggle, a script, a nested
+#      macro, "one page", "select next track") is PLAIN and is invoked exactly ONCE; a child that takes
+#      a whole notch at once still REFUSES the whole macro, and so does a macro with nothing drivable.
+#      The "plain runs once" class is the point: once is what REAPER itself does, so no child can be
+#      amplified -- a "select next track" must never be fired dozens of times by the glide.
 #   3. _diag/macro_chain_probe.cpp -- the whole chain: ACT line -> children -> one notch split across
-#      them, asserting every child is reached and each gets the full travel. This is the check that a
-#      cross-axis macro (zoom both ways -- the common shape) works.
+#      them, asserting every DRIVABLE child is reached with the full travel, that no PLAIN child is ever
+#      delivered travel, and that the plain ones are placed around the gesture (before the first
+#      drivable child -> start; after -> end). Includes the forum report's SWS mode-toggle macro.
 #
 # All three include the REAL src/macro.h and src/routing.h, not copies.
 set -euo pipefail

@@ -9841,3 +9841,101 @@ Invoke-RestMethod -Method Post -ContentType 'application/octet-stream' -InFile <
 
 ⚠️ **上面那份正文保留**（这里是原产地，读起来最全）；但**改动通用规则时先改那两处，再回来同步这里** ——
 不要只改一处。**本仓库专属的差异仍只写在本文件里**：版本号怎么编、发布附件叫什么、`versions/<ver>/` 快照的规矩。
+
+---
+
+## 一百二十五、★ 混合宏：普通子动作**只跑一次**，滚轮子动作照旧动画化（论坛反馈，2026-10-07）
+
+**用户原话**：**"直接实现，我已经按照对方的命令组合做好新的'动作'组合，等待测试"**
+
+### 一、反馈与根因（读代码确认，非推测）
+
+REAPER 论坛一位用户报：他这条宏**不触发平滑** ——
+```
+SWS/wol: Options - Set "Horizontal zoom center" to "Mouse cursor"
+View: Zoom horizontally (MIDI CC relative/mousewheel)
+SWS/wol: Options - Set "Horizontal zoom center" to "Edit cursor or play cursor (default)"
+```
+他要的是"缩放期间**临时**把缩放中心设成鼠标光标，然后还原"。
+
+**根因**（两条都有代码依据）：
+1. `MacroChildren` 里**任一子动作 `ClassifyCommand` 失败 → 整条宏 `return 0`**；
+2. `ClassifyName` 要求动作名含 `View`（`routing.h`）；
+SWS 那两条都不含 → 判不出来 → **整条宏放弃、交回 REAPER** → 没有平滑。
+所以**是设计如此**（旧的"全过才接管"），**不是 bug**。
+
+### 二、为什么可以放宽（安全论证 —— 这是本次能动手的全部依据）
+
+旧规则的理由是：**宏原生每条只执行一次，而插件要重放很多次**；
+若宏里有"选择下一轨"，动画化就等于**狂选几十次**。
+
+**关键**：危险来自**重放很多次**；而**"只跑一次"正是 REAPER 原生的行为**。
+于是把子动作分三类，**只对"本来就该被重复"的那一类施加重复**：
+
+| 类别 | 判定 | 处理 |
+|---|---|---|
+| **DRIVABLE** | 判得出来 + 可重放 + 可摊开 | **动画化**（与原来完全相同）|
+| **PLAIN** | 判不出来（SWS 开关 / 脚本 / 嵌套宏 / `one page` / "选择下一轨"）| **只执行一次** |
+| **REFUSE** | 判得出来但 `kImmediate`（一格一次，如 MIDI 竖直缩放）| **整条宏仍放弃** |
+
+另：**一条可驱动的都没有 → 仍整条放行**给 REAPER（没有手势可跑）。
+
+**摆放位置**：第一条可驱动子动作**之前**的普通子动作 → **手势开始时**跑一次；
+**之后**的 → **手势结束时**跑一次。正好是"设模式 → 缩放 → 还原"的写法。
+
+### 三、做法（只动 `src/smooth_wheel_scroll.cpp` 一个文件）
+
+1. `Route` 加 `bool plain[kMacroMax]`；`Integrator` 加 `macroPlain[]` / `nMacroTail` / `macroTail[]`
+   （**全零初值 → 仍在 `.bss`**，未触发搬家事故）。
+2. `MacroChildren`：`!classified` 不再 `return 0`，改填 `section`+`command` 并标 `plain`；
+   新增"一条可驱动都没有就放弃"；`kImmediate` 仍拒绝。
+3. `Kick`：切分头/尾；头部在 `!wasActive`（**新手势**）时各跑一次 —— 连滚十格不会把设置重跑十次。
+4. `Tick`：手势结束时用**独立分支**跑尾部。**必须独立**于原有补发分支：后者带 `kStepUnits` 条件，
+   而混合宏的滚轮子动作常是 `kStream`，永远不会满足。
+5. **三处循环都要跳过 plain**：`DeliverTravel`、`allStep` 计算、手势结束补发。
+   **漏任何一处 = 那两条 SWS 动作会被动画化重放**（正是要避免的）。
+6. `ReplayPlain()`：复用 `SendRelative(section, cmd, hwnd, 0, 0)`（保持 `g_replaying` 防重入），
+   并打日志 `plain child head/tail sec=… cmd=…`。
+
+### 四、⚠️ 一处**未实测**的推断（必须知道）
+
+`ReplayPlain` 用 `val=0, valhw=0` 配 **`relmode=1`** 调 `KBD_OnMainActionEx`。
+**推断**：对"本来就不读相对值"的动作（普通子动作按定义就是），这等价于"用户正常按下这条动作"。
+**理由**：不读值的动作，值是什么都无所谓。**但它没有被实测过** —— 这是本次唯一需要实机确认的点。
+（`Main_OnCommand` 更"原生"，但它**绕过** `g_replaying` 防重入闸，风险更大，故未采用。）
+
+### 五、门（**全部改到新规则了，这一步是必须的**）
+
+不改门的话，门会"绿着"却守着**已废除的旧规则** —— 那比没有门更糟。
+
+- `_diag/macro_gate_probe.cpp`：把"哪些子动作必须被拒绝"改成**三分法**；断言
+  "普通子动作不再是拒绝理由"，以及宏级规则（无可驱动→放弃；有 REFUSE→放弃）。
+- `_diag/macro_chain_probe.cpp`：**加入论坛宏的真实形状**（`70001 + 990 + 70002`）与
+  "缩放放最前"的变体（`990 + 70001 + 70002`）；断言 ① 可驱动子动作拿到完整 `15.000`
+  ② **普通子动作从未被投递任何行程** ③ 头/尾位置正确。
+- `test/check_macro.sh` 头注释同步改写。
+- **9 门全过**；7 个模型头**零改动** → **不需要同步 Apex**。
+
+### 六、状态
+
+- DLL md5 **`bd0262c9c8c46988a20963713a5a2ab4`**（**171133** 字节；1.7.2 是 170109，**+1024**）。
+  `ext_name` **仍是 `Smooth Wheel Scroll 1.7.2`**（**未升版本号**，等实测通过再说）。
+- **已部署**到 `D:\REAPER\UserPlugins`，等用户用他建好的那条动作实测。
+- **未提交**：`src/smooth_wheel_scroll.cpp`、两个探针、`test/check_macro.sh`。
+- 📌 **本轮环境发现（修正我自己的旧推测）**：`AGENTS.md` **已入库且干净**，
+  远端 `origin/main`（`250dd33`）里**已经有 §123/§124** —— 是**用户那边提交的**，不是我。
+  所以 §124 末尾那条"远端不含 §123/§124"**已过时**，且"AGENTS 留本地"这件事用户已自行处理。
+- ⚠️ **沙箱边界（本轮踩到）**：文件策略回到受限模式后 **Git Bash 起不来**
+  （`couldn't create signal pipe, Win32 error 5`）→ 门跑不了。绕法：**编译直接用 `g++`**
+  （不经 bash，与 `build.sh` 默认参数一致）；**门必须申请一次性放宽权限**才能跑。
+
+### 七、若实测有问题，看日志（`./build.sh --debug-log`）
+
+```
+plain child head sec=0 cmd=…
+plain child tail sec=0 cmd=…
+smooth sec=0 cmd=… macro=3
+```
+- **只有 head 没有 tail** → 尾部没跑（手势结束那个分支有问题）；
+- **tail 跑了但中心没还原** → 第四节那条推断不成立，改用 `Main_OnCommand`；
+- **完全没有 `plain child` 行** → 宏没被接管，回到判据问题，看 `macro child … classified=` 那一行。
