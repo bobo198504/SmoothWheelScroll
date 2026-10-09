@@ -1,18 +1,21 @@
-// HWHEEL PROBE -- is the HORIZONTAL wheel a first-class stream?
+// HWHEEL PROBE -- the horizontal wheel's action-path wiring, and the state of the WHEEL itself.
 //
 //   g++ -std=c++17 -O2 -I../src -o hwheel_probe.exe hwheel_probe.cpp && ./hwheel_probe.exe
 //
-// The report (forum, MX Master 3S thumb wheel) said, and this probe originally CONFIRMED against the
+// The report (forum, MX Master 3S thumb wheel) said, and part (a) of this probe CONFIRMED against the
 // code as it then stood:
 //   (a) the TABLE rows for 977/979/988/990 came back with relativeAction = false, so they demanded
 //       the wheel latch, unlike the very same actions matched by NAME, which set it true from
-//       "mousewheel". The thumb wheel never passes the message hook, so the latch was never armed
-//       and every horizontal notch was refused.
-//   (b) WM_MOUSEHWHEEL was never watched, so nothing could arm that latch anyway.
+//       "mousewheel". That disagreement is a bug in its own right, and it is FIXED (the rows state
+//       the flag now) -- this probe keeps it fixed. It is NOT part of the horizontal-wheel feature:
+//       it is what lets Shift+vertical-wheel drive 977/988 at all, so it stays even though the
+//       feature it was found through does not.
+//   (b) WM_MOUSEHWHEEL was never watched. Watching it IS the horizontal-wheel feature, and that
+//       feature is UNVERIFIED -- no device was available to measure what a tilt/thumb wheel really
+//       reports or how the classifier reads it -- so 1.7.4 ships WITHOUT it. This probe asserts that
+//       it is absent, so bringing it back is a deliberate act.
 //
-// Both are now FIXED, and this probe is what keeps them fixed: it asserts the table and the name
-// rule AGREE about relativeAction (the disagreement was the bug), and that the hook watches the
-// horizontal message. It includes the REAL src/routing.h, so it tests the shipped rule, not a copy.
+// It includes the REAL src/routing.h, so it tests the shipped rule, not a copy.
 
 #include "routing.h"
 
@@ -98,8 +101,16 @@ int main()
     Check(t && n && byTable.axis == byName.axis && byTable.kind == byName.kind, buf);
   }
 
-  // (b) WM_MOUSEHWHEEL: is it watched anywhere? The plugin source is the evidence.
-  printf("\n  message hook: is WM_MOUSEHWHEEL handled?\n");
+  // (b) THE MESSAGE HOOK. This checks the SOURCE TEXT, so it must look for the thing that actually
+  // WOULD watch the message -- a comparison against it -- and not merely the name appearing somewhere.
+  // Two earlier versions of this check were wrong:
+  //   * the first searched for the bare string, and when the feature was removed the explanatory
+  //     COMMENT kept the string alive, so it reported "watched" for a build that does not watch it;
+  //   * the second skipped `//` lines but still counted the DEV log's header TEXT, which legitimately
+  //     names both wheel messages ("V for the vertical one, H for the horizontal one").
+  // A check a comment or a help string can satisfy is not a check. What is asked now is the message
+  // COMPARISON, which only real handler code contains.
+  printf("\n  message hook: does any CODE compare against WM_MOUSEHWHEEL?\n");
   FILE *f = fopen("../src/smooth_wheel_scroll.cpp", "rb");
   if (!f)
     f = fopen("src/smooth_wheel_scroll.cpp", "rb");
@@ -113,18 +124,40 @@ int main()
     const size_t got = fread(text, 1, sizeof(text) - 1, f);
     fclose(f);
     text[got] = 0;
-    const int h = (int)(strstr(text, "WM_MOUSEHWHEEL") ? 1 : 0);
-    printf("  WM_MOUSEHWHEEL occurrences in src/smooth_wheel_scroll.cpp: %d\n", h);
-    Check(h > 0, "(b) the horizontal wheel message IS watched (so its latch can be armed)");
+
+    int compares = 0, mentions = 0;
+    for (char *line = strtok(text, "\n"); line; line = strtok(nullptr, "\n"))
+    {
+      if (!strstr(line, "WM_MOUSEHWHEEL"))
+        continue;
+      const char *p = line;
+      while (*p == ' ' || *p == '\t' || *p == '\r')
+        ++p;
+      if (p[0] == '/' && p[1] == '/')
+        continue; // a comment explains, it does not handle
+      ++mentions;
+      // The handler form is a comparison: `message == WM_MOUSEHWHEEL`.
+      if (strstr(line, "== WM_MOUSEHWHEEL"))
+        ++compares;
+    }
+    printf("  non-comment mentions: %d   of which message COMPARISONS: %d\n", mentions, compares);
+
+    // 1.7.4 SHIPS WITHOUT THE HORIZONTAL WHEEL. The feature is written but unverified -- no device
+    // was available to measure the message's real delta shape or how the classifier reads it -- so it
+    // is out of the release. This assertion states that shipping decision, so re-adding the handler is
+    // a deliberate act that has to come with re-enabling this check.
+    Check(compares == 0, "(b) no handler compares against WM_MOUSEHWHEEL -- as 1.7.4 ships");
+    printf("      (a DEV-log help string and an explanatory comment may still name it; neither\n");
+    printf("       handles anything, which is why the check asks for the comparison)\n");
   }
 
   printf("\n");
   if (g_fail == 0)
   {
-    printf("OK: the horizontal wheel is a first-class stream -- the table declares its actions\n"
-           "    relative, the name rule agrees, and the message hook watches WM_MOUSEHWHEEL.\n");
+    printf("OK: the table declares the horizontal actions relative and the name rule agrees, and\n"
+           "    the horizontal WHEEL itself is deliberately NOT wired up in this release.\n");
     return 0;
   }
-  printf("FAIL: %d check(s) -- the horizontal wheel is not fully wired.\n", g_fail);
+  printf("FAIL: %d check(s).\n", g_fail);
   return 1;
 }

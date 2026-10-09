@@ -24,7 +24,6 @@ anchoring, scroll ranges, step sizes and user-customized rules all stay as REAPE
 |---|---|
 | Actions whose name contains `mousewheel` | matched **by action name**, so custom or re-bound keys work too (**except special ones, e.g. page scrolling**) |
 | Custom actions | a macro built from the above is smoothed as a whole |
-| Horizontal wheel (tilt wheel / thumb wheel) | treated like the vertical wheel, per axis |
 
 ## Events passed through natively
 

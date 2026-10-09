@@ -3583,70 +3583,19 @@ static LRESULT CALLBACK GetMsgProc(int code, WPARAM wParam, LPARAM lParam)
       // Not consumed here: arm the latch for the action path (arrange view).
       InterlockedExchange(&g_wheelTick, (LONG)GetTickCount());
     }
-    else if (m && m->message == WM_MOUSEHWHEEL)
-    {
-      // THE HORIZONTAL WHEEL (tilt wheel, MX Master thumb wheel, sideways touchpad swipe).
-      //
-      // It reaches the plugin ONLY through this message -- a tilt or thumb wheel is a separate
-      // device stream that REAPER resolves straight to its bound action (HorizWheel -> 988/977,
-      // Ctrl+HorizWheel -> 990/979, and a user may rebind any of them), so unlike the vertical
-      // wheel there is no surface to take over here and NO value to forward: all this branch does
-      // is classify the device and arm the latch for the action path, exactly as the vertical
-      // branch does at its own tail. The surface work above (arrange bars, mixer, panels, lists)
-      // is deliberately NOT mirrored: those are all vertical gestures with no measured horizontal
-      // equivalent, and inventing one without a device to measure on is how the wrong rule gets
-      // written.
-      //
-      // The SAME device filter applies, through the horizontal stream's own tracker: a notched or
-      // free-spinning wheel arms the latch, a touchpad (or an unidentified wheel) clears it, so
-      // the sideways swipe of a touchpad is left entirely to REAPER -- it is already smooth, and a
-      // second easing on top of it is wrong. That is the same treatment the vertical wheel gets.
-      const int hdelta = (int)(short)HIWORD(m->wParam);
-      const bool hAnimatable = IsAnimatableWheel(hdelta, true);
 
-      if (hAnimatable)
-      {
-        g_wheelHwnd = WindowFromPoint(m->pt);
-        g_wheelPt = m->pt;
-        g_wheelMods[0] = (GetKeyState(VK_SHIFT) & 0x8000) ? 'S' : '-';
-        g_wheelMods[1] = (GetKeyState(VK_CONTROL) & 0x8000) ? 'C' : '-';
-        g_wheelMods[2] = (GetKeyState(VK_MENU) & 0x8000) ? 'A' : '-';
-        g_wheelSeqTick = GetTickCount();
-        InterlockedExchange(&g_wheelTickH, (LONG)GetTickCount());
-      }
-      else
-      {
-        InterlockedExchange(&g_wheelTickH, 0);
-      }
-
-#ifdef SWS_WHEEL_LOG
-      // THE HORIZONTAL WHEEL GOES INTO THE SAME SHAREABLE FILE as the vertical one. Without this the
-      // file a tester sends back would contain NO horizontal wheel message at all, so the one data
-      // set this feature needs (what a tilt wheel / thumb wheel actually reports, and how the
-      // classifier reads it) would be missing from the very report meant to carry it. The record
-      // carries the same fields; `horiz` marks which stream it came from, so the two are told apart
-      // in one file.
-      {
-        char hcls[64] = {0};
-        HWND hw = WindowFromPoint(m->pt);
-        if (hw)
-          GetClassNameA(hw, hcls, sizeof(hcls));
-        WheelLogRecord(hdelta, (unsigned)(m->wParam & 0xFFFF), (long)GetMessageExtraInfo(), hcls,
-                       LastWheelDevice(true), hAnimatable, true);
-      }
-#endif
-
-      if (kDebugLog)
-      {
-        char hcls[64] = {0};
-        HWND hw = WindowFromPoint(m->pt);
-        if (hw)
-          GetClassNameA(hw, hcls, sizeof(hcls));
-        Log("HWHEEL delta=%d pt=(%d,%d) mod=%s class=%s dev=%s animatable=%d latch=%d", hdelta,
-            m->pt.x, m->pt.y, g_wheelMods, hcls, DeviceName(LastWheelDevice(true)), hAnimatable ? 1 : 0,
-            InterlockedCompareExchange(&g_wheelTickH, 0, 0) ? 1 : 0);
-      }
-    }
+    // THE HORIZONTAL WHEEL (WM_MOUSEHWHEEL) IS NOT WATCHED. A tilt wheel or a thumb wheel is a
+    // separate message stream, and handling it is a feature still under development -- it was written
+    // and then deliberately taken back out of 1.7.4, because it is unverified: no device was
+    // available to measure the message's real delta shape or how the classifier reads it, and a
+    // release must not announce what has not been tested.
+    //
+    // What stays is the STATIC `relativeAction` declaration in routing.h. That is not part of this
+    // feature: it fixes a genuine disagreement (the table left the flag at its default while the
+    // name rule derived it from the action's own name, so the same action was judged differently
+    // depending on which rule matched first) and it is what lets a Shift+vertical-wheel gesture
+    // drive 977/988 at all. Removing it would change vertical behaviour, which is not what was
+    // asked. The horizontal feature comes back when it has a device to be measured on.
   }
   return CallNextHookEx(g_msgHook, code, wParam, lParam);
 }
