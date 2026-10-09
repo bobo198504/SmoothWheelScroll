@@ -9918,10 +9918,18 @@ SWS 那两条都不含 → 判不出来 → **整条宏放弃、交回 REAPER** 
 
 ### 六、状态
 
-- DLL md5 **`bd0262c9c8c46988a20963713a5a2ab4`**（**171133** 字节；1.7.2 是 170109，**+1024**）。
-  `ext_name` **仍是 `Smooth Wheel Scroll 1.7.2`**（**未升版本号**，等实测通过再说）。
-- **已部署**到 `D:\REAPER\UserPlugins`，等用户用他建好的那条动作实测。
-- **未提交**：`src/smooth_wheel_scroll.cpp`、两个探针、`test/check_macro.sh`。
+- **实测通过**（用户原话：**"正常"**）→ **已发布 v1.7.3**，日志署名 **ferropop**。
+- 发布版 DLL md5 **`69a515c47a6495368058fe348f7680d6`**（171133 字节），
+  `ext_name` = `Smooth Wheel Scroll 1.7.3`。
+- 提交 **`1cf9e6b`**（17 个文件：`src` + 两份 README + 两个探针 + `test/check_macro.sh` +
+  `AGENTS.md` + `versions/1.7.3/`），**已推送**（0/0）；
+  tag **`v1.7.3`**（带注释，注释文本 `Smooth Wheel Scroll 1.7.3`）→ `1cf9e6b`；
+  release **`v1.7.3`**（名称纯三段）**只挂 1 个附件**（171133 字节）。
+- ⚠️ **别被两个 md5 搞混**：测量/调参阶段那个临时构建是 **`bd0262c9…`**（**同一套逻辑**，
+  只是 `ext_name` 当时还没升到 1.7.3）。**版本号是最后才升的**，所以两个 md5 的行为完全一样。
+- **仍待部署**：发布版 `69a515c4…` **尚未**装进 `UserPlugins`（当时 REAPER 开着、DLL 被占用）。
+  用户关掉 REAPER 后一条命令即可。
+- ⚠️ **`.gitignore` 仍未提交**（本次会话加的 Apex 忽略规则），**与本功能无关**，等用户定。
 - 📌 **本轮环境发现（修正我自己的旧推测）**：`AGENTS.md` **已入库且干净**，
   远端 `origin/main`（`250dd33`）里**已经有 §123/§124** —— 是**用户那边提交的**，不是我。
   所以 §124 末尾那条"远端不含 §123/§124"**已过时**，且"AGENTS 留本地"这件事用户已自行处理。
@@ -9939,3 +9947,327 @@ smooth sec=0 cmd=… macro=3
 - **只有 head 没有 tail** → 尾部没跑（手势结束那个分支有问题）；
 - **tail 跑了但中心没还原** → 第四节那条推断不成立，改用 `Main_OnCommand`；
 - **完全没有 `plain child` 行** → 宏没被接管，回到判据问题，看 `macro child … classified=` 那一行。
+
+---
+
+## 126. 水平滚轮（倾斜轮 / 拇指轮）：动作路径打通（2026-10-08，**未发布**，DEV 待网友实测）
+
+**起因**：论坛反馈（Logitech MX Master 3S 拇指轮）。他的 HorizWheel 绑到 **977**
+（`Scroll horizontally reversed (MIDI CC relative/mousewheel)`）、Ctrl+HorizWheel 绑 **979**，
+两个都**没有缓动**；而**同一个 977 用 Shift+竖轮却丝滑**。
+
+### 诊断（两条，都已实测证实，不是推测）
+
+用新探针 `_diag/hwheel_probe.cpp`（include **真的** `src/routing.h`）：
+
+| cmd | 表(table) rel | 名规则 rel | 名规则也认得 |
+|---|---|---|---|
+| 988 / 977 / 990 / 979 | **0** | **1** | yes |
+
+1. **同一条动作，走表与走名规则答案不同。** `LookupAction` 命中即 `return true`，**没设
+   `relativeAction`**，保持默认 `false`；而 `ClassifyName` 会按名字里的 `mousewheel` 设成 `true`
+   （`routing.h` 旧注释还写着 "The table's own rows are all false"，把 bug 当成了设计）。
+   表**先试**，所以表说了算 → 977/979 这类**要求滚轮闩锁**。
+2. **`WM_MOUSEHWHEEL` 在 `src/` 里出现 0 次** —— 钩子只看 `WM_MOUSEWHEEL`。
+   水平轮消息**根本不进钩子**，闩锁**永远上不了**。
+
+两条叠加 → **水平滚轮驱动这些动作必被拒**，走原生跳步。Shift+竖轮能过，是因为竖轮经过钩子、上了闩。
+
+### 修法（三处，比网友补丁更稳）
+
+1. **表项静态声明 `relativeAction`**（`routing.h`）：16 行全写 `true`。
+   理由：**是不是相对动作是动作自身的属性，不该取决于"从表还是从名字找到"** —— 那个不一致就是
+   根因。静态声明**零运行时开销**（网友方案是在热路径上对每条表项再查一次名字）。
+2. **`WM_MOUSEHWHEEL` 上闩**（`smooth_wheel_scroll.cpp` 的 `GetMsgProc`）：只做**设备判定 + 上闩**，
+   **不做任何表面接管**（arrange 滚动条 / MCP / 面板 / 列表一律不镜像 —— 那些都是竖轮手势，
+   没有实测的水平对应物；**没有设备就编规则 = 写错规则**）。
+3. **门**：见下。
+
+### ★ 关键设计：两个轮子的状态**必须分开**，但**规则与模型共用**
+
+`DeviceTracker` 判定依据是"最近窗口里有几种不同幅度"。**若两轮共用一个跟踪器**：
+竖轮发整格 `120` 会清零窗口，横轮的 `15,15` 混进同一窗口 → 幅度种数 ≥ 2 → **判成触控板 → 两轮都不缓动**。
+
+所以按轴分成两套（`g_device`/`g_deviceH`、`g_lastDevTick`/`g_lastDevTickH`、
+`g_lastDevKind`/`g_lastDevKindH`、`g_wheelTick`/`g_wheelTickH`），
+**`IsAnimatableWheel(delta, horizontal)` 与 `LastWheelDevice(horizontal)` 只是多了一个轴参数** ——
+**过滤规则、模型、投递全部共用同一套**（`Kick` 本来就按 `spec.axis` 选 integrator）。
+用户定的原则：**"两个不相干扰，但用的一样的过滤，一样的动画模型。"**
+
+- `LastWheelDevice(false)` 用于动画球的步长量子（图表历来只画竖轮）。
+- `OnAction` 的门闩按**动作自己的轴**选：水平动作只认水平的闩，**不会被竖轮的一格"担保"**。
+
+### 门
+
+- `test/check_routes.sh`：**放宽两条已记录改动**（104 的 `988/977 → step`；**新的 126：`rel` 列
+  0→1**），并**新增一条更强的断言** —— 把 `rel` 列屏蔽后两文件必须**逐行相同**，
+  这样"顺手改了 axis/delivery 却借 rel 蒙混"会被抓住。
+- **门抓不到它是本次的教训**：`check_routes.sh` 一直**只比对 delivery/axis，从不断言 `rel`**，
+  所以"表项 rel=0"这个 bug 存在至今无人发现。**新增 hwheel 探针纳入该门**，断言
+  ①表与名规则对 `relativeAction` 一致 ②钩子里确有 `WM_MOUSEHWHEEL`。
+- **9 扇门全过**（沙箱内用 g++ 直编直跑，绕开 Git Bash 的 `signal pipe` 限制）。
+
+### 状态
+
+- **未提交、未发布**（用户要求："先不发布，加上后，部署一版 DEV，我单独发给他，让他测试"）。
+- 版本号**沿用 1.7.3**（不编造第四段）。
+- ★ **署名已定：`poydepzaj1616`**（2026-10-08 用户指定）。发布时的日志条目按规范写
+  `（感谢poydepzaj1616）` / `（thank's poydepzaj1616)`（照抄 AGENTS 署名示范的括号与 `thank's` 写法）。
+  **用户明确说"先记着，不用马上部署"** → 只是记住，**不要**为此重新构建或部署。
+- 已部署 **DEV**（最终版，见下面 ✅ 那条；本节早先写的 `a25ff2f7…`/208101 字节是**第一版**，已作废）：
+  `D:\REAPER\UserPlugins\reaper_smoothwheelscroll-x64-DEV.dll`
+  正式版**已改名为 `.dll.off` 并备份**为 `_backup_1.7.3_release.dll`（md5 `69a515c4…`），
+  **两者不可同时在 UserPlugins**（会装两个钩子、每个滚轮动画两次）。
+- ⚠️ **同一个源码两次编译，PE 头 4 个字节点会不同**（偏移 136 的 **PE 时间戳**，即链接时刻）；
+  长度同为 208101 时**逐字节只差这 4 个**。所以**md5 不能当"是否同一份代码"的判据**，
+  要比就比除该字段外的字节。本次为此白查了一轮，记下来。
+- ⚠️⚠️ **重大修正：`--wheel-log` 的 DEV 版里 `Log()` 全部是空桩**（本轮实测发现）。
+  `kDebugLog` 只由 **`SWS_DEBUG_LOG`** 打开，而 `--wheel-log` 只定义 **`SWS_WHEEL_LOG`** ——
+  **两个开关独立**（代码注释里写明"independent and can be combined"）。
+  所以第一版 DEV 里 **`HWHEEL delta=…`／`latch=` 等诊断字符串全部不存在**（实测 offset=-1），
+  网友拿到的会是一个"**出了问题也没有数据**"的版本 —— **"让他测"就白测了**。
+  **DEV 必须两个开关一起给**：`-DSWS_WHEEL_LOG -DSWS_DEBUG_LOG`
+  （`--wheel-log --debug-log`）。实测两个都在（`HWHEEL delta`@118776、`latch=`@116673）。
+- 📌 **查 DLL 里有没有某个字符串，用 ASCII 逐字节搜，不要用 `-match`**：
+  这些格式串是 **UTF-8/ASCII**（实测 `Smooth` = `53 6D 6F 6F 74 68`），不是 UTF-16。
+  我起初用 `[Text.Encoding]::Unicode.GetString($bytes) -match …`，**连 1.7.3 早就发布的
+  `plain child` 都搜不到**（因为整文件按 UTF-16 解码在奇数字节处全错位），差点误判成"代码没编进去"。
+  **教训：搜不到时要先怀疑搜索方法，用一条必然存在的串（如 `Smooth Wheel Scroll`）校准。**
+- ✅ **DEV 最终版（含水平轮日志）**：`-DSWS_WHEEL_LOG -DSWS_DEBUG_LOG`，**217371 字节**，
+  md5 `5213ff16f1f8fff6776f9264c7d8dfa7`，已部署。
+- ⚠️⚠️ **又一发现：水平轮一开始根本没进那个"发回来的日志文件"**（本轮修掉）。
+  `WheelLogRecord()` 原先**只有一处调用**（垂直轮分支）；水平轮分支只写了 `Log(...)`，
+  那走 `--debug-log` 到 **%TEMP%**，**不是**发给网友回收的那个
+  `UserPlugins\SmoothWheelScroll_wheel_log.txt`。
+  → 后果：网友发回来的文件里**一条水平轮数据都没有**，"运行不正常就把日志给我"这条**会落空**。
+  **修法**：水平轮也调 `WheelLogRecord(..., horiz=true)`；`wheel_log.h` 加 `axis` 列
+  （`V` = 竖轮 `WM_MOUSEWHEEL`，`H` = 横轮 `WM_MOUSEHWHEEL`），**追加在末尾，不动已有列**。
+  探针 `_diag/wheel_log_probe.cpp` 加两条断言（表头有 axis 列、`V`/`H` 确实分开），防止再被静默丢掉。
+  **教训：新增一条消息路径时，要检查它是否也需要走"对外回收数据的那个通道"——只写 `Log()` 是不够的。**
+- 📌 **日志写在哪**：**DLL 所在文件夹**（`GetModuleFileNameA(g_hInst)` 取目录），
+  即 `UserPlugins\SmoothWheelScroll_wheel_log.txt`；**没有 fallback**（故意不落到 REAPER 安装目录）。
+  每次手势结束 + 每秒最多一次 + 卸载时各写一次，只保留最近 **50** 条。
+  → **让对方"发之前先滚两下"**，否则可能读到旧内容。
+- 🎁 **给网友的发布物（已上线）**：pre-release **`v1.7.4+dev1008`**
+  （https://github.com/bobo198504/SmoothWheelScroll/releases/tag/v1.7.4%2Bdev1008 ），
+  **附件 = DEV DLL 一个**（`reaper_smoothwheelscroll-x64-DEV.dll`，217371 字节，
+  md5 `5213ff16f1f8fff6776f9264c7d8dfa7`）。
+  另有分支 **`hwheel-preview`**（只放构建物与说明，**零源码**）。
+  说明文件 `build\HWHEEL_PREVIEW.md`（分支上也有）。
+
+### ★★ GitHub 附件上传：**必须 `--noproxy "*"`**（2026-10-08 踩坑，以后每次都适用）
+
+**症状**：`gh release create --attach` / `gh release upload` / `gh api` 全部 **404**，
+`curl` 到 `uploads.github.com` 返回 **301 → `github.com`**，加了 `-L` 就变成网页的 422。
+
+**真因**（查到底了，别再重推）：**本机有个本地代理**，环境变量里有
+`HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` = **`http://127.0.0.1:7897`**（Clash 之类）。
+它的规则**不认识 `uploads.github.com`**，于是把请求 301 到主站 `github.com`，
+而附件上传**只能**在 uploads 主机做（`api.github.com/.../assets` 是 **404**）。
+→ 所以这**不是沙箱问题、不是 gh 的 bug、也不是权限问题**（申请放宽权限也没用）。
+
+**✅ 可用的命令**（实测 `http_code=201`，附件 `state=uploaded`）：
+
+```powershell
+$tok = gh auth token
+curl.exe -s --noproxy "*" -X POST `
+  -H "Authorization: Bearer $tok" `
+  -H "Content-Type: application/octet-stream" `
+  --data-binary "@<路径>\文件.dll" `
+  "https://uploads.github.com/repos/<owner>/<repo>/releases/<release_id>/assets?name=<附件名>"
+```
+
+要点：①**`--noproxy "*"`**（关键）②`-H "Content-Type: application/octet-stream"` ③release_id 用
+`gh api repos/<owner>/<repo>/releases` 取 ④**不要加 `-L`**（跟随重定向会打到网页）。
+
+- ⚠️ `curl` 在**受限沙箱**下会先报 `schannel: AcquireCredentialsHandle failed`（证书存储被挡）
+  → 那一步需要**一次性放宽权限**；放宽后不再报 schannel 错。
+- ⚠️ 放宽权限时 **`$env:TEMP` 可能指向不同目录**，文件会"找不到" →
+  **把要上传的文件放在工作区内**（如 `build/`），两种模式都能访问。
+- 📌 **另一个坑：`build/` 里的跟踪文件在切分支时会消失**。
+  `hwheel-preview` 分支跟踪了 `build/reaper_...-DEV.dll`，`git checkout main` 后本地文件**被删**。
+  要取回：`git cat-file blob <branch>:<path>`，**且必须用 `cmd /c "... > file"` 重定向**——
+  PowerShell 的 `>` 会做编码转换，把二进制搞坏（实测 217371 → 432842 字节）。
+- 📌 **别用 `gh api` 传附件**：它会强制给主机加 `api.` 前缀，
+  得到 `api.uploads.github.com` → 证书不匹配（`x509: certificate is valid for github.com`）。
+- 📌 md5 一致 ≠ zip 一致：**zip 内含时间戳**，重新打包 md5 必变；要比就比**里面的 DLL**。
+- ✅ **上传后必须回验**：读 release 的 `assets`（count / size / state），并**把附件下载回来算 md5**
+  与本地比。本次实测：`assets:1`、`size=217371`、`state=uploaded`、下载回来 md5 **一致**。
+
+### ★ 另一个 fork：`flarkflarkflark` 在做 **Linux 移植**（2026-10-08 查明，**与水平滚轮无关**）
+
+用户发现有人 fork 过一版，问要不要对比 PR。**查清后结论：不必，主题不相干。**
+
+- fork：**`flarkflarkflark/SmoothWheelScroll-REAPER`**（2026-09-13 建，最后推送 10-04）。
+- 它的 **`main` 没有任何自己的提交**（compare 结果 `ahead_by=0`、`behind_by=28`）——
+  他**没打算**往上游推，是自己在维护。
+- 他真正的两条分支（都 `diverged`、基于 **1.7.0/1.7.2**，落后上游 16 个提交）：
+  - **`linux-port`**（6 commits）：`src/platform_compat.h`、`build-linux.sh`、`PORTING.md`、
+    **SWELL**（WDL 的跨平台层）头文件，`smooth_wheel_scroll.cpp` +150/-15。
+  - **`settings-ui-port`**（10 commits）：上面全部 + **Linux 原生设置面板**（1200+ 行）+
+    三个新门（`check_settings_store/ui/theme_watch`），并**把 1.7.3 的 `src/macro.h`（+167）也移植了**。
+- ⚠️ **一条值得将来核实的线索**：他的提交 `6dc7263 "Fix Extensions menu: OnMenuHook was a no-op,
+  port it for real"` —— 声称上游的 **`OnMenuHook` 是个空操作**。这**可能也影响 Windows 版**。
+  **用户说"不管了"，所以本次未查**；将来若有人报 Extensions 菜单异常，先看这条。
+- 📌 **将来若真要做 Linux**，他的 `PORTING.md`（463~723 行）是现成的实测资产。
+- 🧹 **旧的 `SmoothWheelScroll_wheel_log.txt` 已改名为 `_old_wheel_log_before_hwheel.txt`**
+  （它是**旧格式、没有 axis 列**，内容是用户本机 9 条竖轮数据）——**移开而不是删**，
+  免得网友误发旧格式文件。用户可自行处置。
+- ✅ **Apex 侧不需要同步**（本轮**运行了 Apex 的比对门逻辑**核实，不是凭判断）：
+  `shared/` 只有 `model.h`/`anim3_core.h`/`anim161_core.h` 三个头，md5 与 `SOURCE.md` 指纹表
+  **完全一致**（`ff6fecfe…`/`8d2231ce…`/`d785d937…`）→ "OK: the model is identical in both projects"。
+  本次改动落在 `routing.h`/`smooth_wheel_scroll.cpp`/`wheel_log.h`，**都不在共享模型范围内**
+  （`wheel_log.h` 是插件侧的 DEV 诊断头，不是模型）。
+- ✅ **12 个探针 + 路由门判断逻辑全部实跑通过**（含 `check_routes.sh` 的逐行规则、
+  记录项存在性断言、以及 rel 列归一化后的强断言：归一化 diff = 4 行，正是 988/977 的 pan）。
+- **待实测**（用户明确说他也没有水平滚轮设备，**只能发给论坛网友测**）：①拇指轮是否真的丝滑
+  ②触控板横滑是否被正确放行 ③`WM_MOUSEHWHEEL` 的 delta 形态（网友日志是 `val=15 relmode=1`，
+  但那是**动作**收到的值，不是**消息**的原始 delta）。
+- ⚠️ **网友的 `WM_MOUSEHWHEEL` 补丁里 `IsAnimatableWheel` 的用法未经验证**：水平轮与垂直轮的
+  符号约定**相反**（水平右为正、垂直上为正），且触控板横滑混在同一消息里。他的判断是照抄竖轮的，
+  **没有说明为什么适用** —— 这正是需要 DEV 实测的地方。
+- **模型头零改动**（`model.h`/`anim3_core.h`/`anim161_core.h`/`device.h` 都没动）
+  → **不需要同步 Apex**（`relativeAction` 在 `routing.h`，属插件侧的"动作表"，不是共享模型）。
+
+---
+
+## 127. **1.7.4 正式发布**：行高补偿 + 补发方向修复 + 水平滚轮（2026-10-09）
+
+**§126 的水平滚轮 + 本轮的另两条，一起作为 1.7.4 发布。**
+快照 `versions/1.7.4/`，DLL md5 **`e23766fa811d9431286c4d852d1a3f6d`**（172394 字节），
+`ext_name` = `Smooth Wheel Scroll 1.7.4`。
+
+**改动 3 个文件**：`smooth_wheel_scroll.cpp`、`routing.h`、`wheel_log.h`（DEV 专用）。
+**4 个共享模型头全部未变 → 不需要同步 Apex**（已用 md5 逐项核对，不是凭判断）。
+
+### 一、主视图垂直滚动的"行高补偿"（用户验收"很舒服"）
+
+**问题**：垂直滚动走**整行**，而一行的像素高度 = 缩放 → **放得越大滚得越远、缩得越小滚得越慢**。
+用户要求"缩小时补上来"，并以"放得很大"为基准（那个手感已认可）。
+
+**做法**：`gain = kRowRefPx / rowHeightPx`，钳到 `[1, 7.2]`。
+- `kRowRefPx = 196.0`（用户"放很大"时**实测**的行高）
+- 行高来源 `GetMediaTrackInfo_Value(GetTrack(nullptr,0), "I_TCPH")`（官方只读，直接就是像素）
+- **基准端（≥196px）恒为 1.0 → 已认可的手感逐位不变**
+- **只作用于主视图垂直滚动 989/978**。**钢琴窗已排除**（用户要求）：钢琴窗的"行"是**琴键**，
+  高度不跟随轨道高度，`I_TCPH` 对它无意义。**垂直缩放不做**（倍率不是距离）。水平轴不做。
+
+**强度是常量 `kRowGainScale = 1.2`，不是滑杆。** 曾做成滑杆（0=关/1.2=最强），
+用户测后要求**去掉、固定最大**："一个只会被拉到最大的滑杆就不该存在"。
+（曾短暂存过 extstate 键 `keep`，现已**主动清空**，免得留一个不起作用的设置。）
+
+### ⚠️⚠️ 本功能连续失败两次，**两次都是我假设错了"输入"**（重要教训）
+
+| # | 我的假设 | 实测真相 | 后果 |
+|---|---|---|---|
+| 1 | `get_config_var("zoom")` 是**倍数**（默认高度 = 1.0）| 是 **25.817565 的内部标度** | 推出的行高 619px → gain 被钳成 1.0 → **完全无效** |
+| 2 | 基准行高 **24px**（我**凭空定的**）| 用户真实两端是 **196px / 26px** | 24 < 26 → gain 全被钳掉 → **又完全无效** |
+
+**关键教训（写下来）**：**探针只能验证"给定这个输入，算法对不对"，验证不了
+"我拿到的输入是不是我以为的那个东西"。**
+本轮两次我都有探针、都"通过"了，功能却是死的。
+**唯一能发现这类错误的是真实环境的一行诊断日志** —— 我加的
+`rowgain: rowPx=… gain=…` 一行就暴露了单位错误，第二行暴露了基准错误。
+→ **凡是"算法依赖某个外部读数"的新功能，第一天就要把那个读数打进日志，让它可观测、不用猜。**
+
+### 二、修复：手势末尾补发方向反了（"滚一下又弹回来"）
+
+**报告**：`Slow step = 1`、`Ramp-up ≥1000` 时，用**最小一格**滚轮，主视图水平/垂直滚动与
+钢琴窗垂直滚动（三个都是 `kStepUnits`）会"滚一下，再往回弹一下"。
+
+**诊断（DEV 投递日志，非推理）**：
+```
+ 19    0/977   units=-1.0000   accum=+0.49037   ← 向后发，零头却是正的
+ 21    0/977   units=+1.0000   accum=+0.00000   topup=1   ← 补发反向
+```
+**根因**：补发方向取自 `accum` 的符号，而 `accum` 是**取整余数** ——
+发一个整单位会**冲过零**、留下**反号**尾巴。`Slow step = 1` 时行程够不到 1 单位门槛，
+**全靠末尾那一次补发**，于是补反了。
+
+**修法**：`Integrator::gestureSign`（在 `Kick` 里记下**滚轮本身的方向**）→ 补发改用它。
+宏的子动作同样用它。验证 `_diag/topup_dir_probe.cpp`：
+日志里那个反向案例被修正，**零头与手势同向的普通情况 6 组对拍全部不变**，双向都对。
+
+### 三、DEV 投递日志（`wheel_log.h`，仅 `--wheel-log` 编译）
+
+给 `WheelLog` 加了**独立的 SEND 环**（`SendLogRec`，64 条）：
+记录**每一次真正到达 REAPER 的调用** ——`units`（含符号）/ `val` / `valhw` / `topup` / `accum`。
+**原日志只说"收到了什么滚轮消息"，从不说"回送了什么"**，而"回弹"这种 bug 恰好在回送侧。
+埋点在 `SendRelative`（所有投递的唯一出口）。**正式版实测不含任何日志代码**
+（`wheel_log` / `HWHEEL delta` 字符串出现 0 次）。
+
+### 四、门
+
+**9 门全过**；**14 个探针**全过（新增 `hwheel_probe`、`topup_dir_probe`、`rowgain_probe`）。
+三种构建都过：默认 / `--wheel-log` / `--no-settings-ui`。
+`topup_dir_probe` 与 `rowgain_probe` **已并入 `check_routes.sh`**（把这两条新行为的守护变成门的一部分）。
+
+排查期的草稿探针（`step_bounce_probe` / `step_bounce2` / `step_bounce3` / `rowstep_probe` /
+`replay_log_probe`）**已移到 `_hist/retired_probes_1.7.4/`**（带 README 说明）。
+它们**在功能还是坏的时候就全都"通过"了** —— 教训见下面 §128 末尾。
+
+### 五、待办
+
+- **`v1.7.4+dev1008` 那个预发布与 `hwheel-preview` 分支仍在**（用户明确："原来那个 dev 不用管，
+  等对方反馈过来，到时候可行再加上"）。**水平滚轮尚待网友实测**（拇指轮手感、触控板横滑是否放行、
+  `WM_MOUSEHWHEEL` 的原始 delta 形态）——这三条本轮**仍未验证**。
+- **仓库操作**：本轮所有改动**尚未提交**（等用户发话）。
+
+---
+
+## 128. FX / ARA 插件的滚轮能不能接管（2026-10-09 调研，**未实现**）
+
+**起因**：用户问"REAPER 的一些插件，有没有办法也接管"，点名 **ReaTune**（自带）与 **ARA2 修音插件**
+（实际是 **Vovious**，VST3）。目标都是"让它们的大窗口的缩放/滚动也平滑"。
+
+**结论：判据只有一个 —— 界面窗口的 `pid` 是不是 REAPER 的。** 是 → 钩子能收到 → 有戏；
+不是 → 滚轮**根本不进 REAPER 进程** → **插件永远做不到**，与"难不难"无关。
+
+### 实测结果
+
+| 目标 | 窗口 | pid | 结论 |
+|---|---|---|---|
+| **ReaTune** | `ReatuneGraph2`，挂在 `#32770`→`REAPERwnd` 下 | **REAPER 的** | **在进程内，技术上可行**（用户说用得少，暂不做）|
+| **Vovious** | `JUCE_1a11eb43d94` | **`Vovious.exe` 自己的进程** | **做不到**（见下）|
+
+**Vovious 的关键细节（这才是判定的难点）**：REAPER 进程里**确实有**一个 `JUCE_1a11eb23bbe`
+窗口，挂在 **`reaperPluginHostWrapProc`**（REAPER 的插件宿主）下 —— 但它是**占位空壳**，
+被 `Vovious.exe` 的真界面（`673,595–2991,1733`）**完全盖住**。
+`WindowFromPoint` 在三个不同点取样，**返回的都是 `Vovious.exe` 的窗口**。
+
+### ⚠️ 我犯的判断错误（重要）
+
+1. **先说"ARA2 通常独立进程、插件够不着"** —— 那是**猜的**，没有依据。
+2. **然后在 REAPER 进程里看到 `JUCE_` 类窗口，就改口"在进程内"** —— 又错了。
+   **"进程里有同名类窗口" ≠ "插件界面在那个进程里"**：那可能只是宿主占位窗口。
+3. **正确的判据是三层**：①窗口 `pid` ②`WindowFromPoint` 拿到的**最上层实际窗口** ③Z 序。
+   **只看第①层会被占位窗口骗到。**
+
+### 顺带证明的一件事（对独立 APP 有用）
+
+**从外部进程给 `Vovious.exe` 发 `WM_MOUSEWHEEL`，它认**（实测 157/384 采样像素变化）。
+→ 用户"**ARA2 留给独立 APP**"的判断**被实测证实是对的**：
+APP 不受"必须在 REAPER 钩子里"的限制，可以直接找到插件窗口发消息。
+（**插件做不到**，因为它只能在自己的进程钩子里工作。）
+
+### 探针（都是只读工具，留在 `_diag/`）
+
+- **`windowsurvey.cpp`**：枚举 **REAPER 进程内**所有窗口类 + **进程内可见顶层窗口（带标题）**
+  （`[1b]` 就是靠这条抓出 `VST3: Vovious` 的）+ **其他进程的可见顶层窗口（含 exe 名）**。
+  **三个视角缺一不可** —— 只列进程内会漏掉"独立进程的界面"，只列进程外会漏掉"占位窗口"。
+- **`fxwheel_probe.cpp`**：给指定窗口发合成滚轮消息，**用"采样像素变化计数"判断它动没动**。
+  用法 `--class <类名> [delta]`（自动找窗口、瞄准中心）。
+
+### ⚠️ 这个探针我写坏了三次，都是"把无效测量当成证据"
+
+| # | 错误 | 症状 |
+|---|---|---|
+| 1 | 用**哈希**判断窗口变没变 | 采样全黑时哈希退化成常量 `0`，之后一律误报"没变" |
+| 2 | **读屏幕像素但不检查窗口是否可见** | 目标窗口被移走后**读到的是文件管理器**，报出"383/384 变了"的假结果 |
+| 3 | **可见性检查过严** | 要求 `WindowFromPoint` 返回窗口自己或其子窗口；JUCE 自绘窗口的实际命中目标是内部 HWND → **把可见窗口误判为被遮挡** |
+
+**教训（与 §127 那条同源）**：**测量工具本身必须先自证有效**。
+`GetPixel` 只读屏幕像素（AGENTS 早有记录，我**还是**犯了第 2 条）——
+凡是"看屏幕像素"的测量，**必须同时报告"这次采样是否可信"**，不可信就**拒绝给结论**，
+而不是给一个看起来像证据的数字。**第 3 版的修法**：只排除"**别的进程**盖住"，
+同进程内的一律算可信（因为那是同一窗口层级）。

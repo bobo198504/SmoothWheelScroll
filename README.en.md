@@ -24,6 +24,7 @@ anchoring, scroll ranges, step sizes and user-customized rules all stay as REAPE
 |---|---|
 | Actions whose name contains `mousewheel` | matched **by action name**, so custom or re-bound keys work too (**except special ones, e.g. page scrolling**) |
 | Custom actions | a macro built from the above is smoothed as a whole |
+| Horizontal wheel (tilt wheel / thumb wheel) | treated like the vertical wheel, per axis |
 
 ## Events passed through natively
 
@@ -42,7 +43,7 @@ Windows x64, REAPER 7.
    `%APPDATA%\REAPER\UserPlugins\`.
 3. Restart REAPER.
 
-Once loaded it appears as `Smooth Wheel Scroll 1.7.3`.
+Once loaded it appears as `Smooth Wheel Scroll 1.7.4`.
 
 ### Settings panel
 
@@ -58,6 +59,13 @@ are saved automatically.
 
 Below the sliders is a **motion chart**: every received wheel message launches a ball along the path,
 showing what the current settings do.
+
+### Zoom and scroll distance
+
+The main view's **vertical scroll** moves whole track rows, and a row's pixel height changes with the
+zoom — so the more you zoom out, the less one notch travels. The plugin compensates for the current
+row height, so scrolling a **shrunken arrange view** covers a distance comparable to a zoomed-in one
+(up to 7.2x). **Above a certain zoom nothing is compensated** and that end keeps its native feel.
 
 <p align="center">
   <img src="test/settings-dark.png" alt="Settings panel (dark)" width="330">

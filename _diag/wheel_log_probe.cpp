@@ -114,7 +114,37 @@ int main()
     Check(strstr(buf, "15 x4") != nullptr, "tally counts 15 x4");
     Check(strstr(buf, "30 x2") != nullptr, "tally counts 30 x2");
     Check(strstr(buf, "extra-word  anim  device") != nullptr, "file has the column header");
+    // The axis column is what lets a tester's report tell a tilt/thumb wheel apart from the ordinary
+    // one. It is asserted here so the column cannot be dropped silently: without it a report that
+    // mixes both wheels is unreadable exactly when it is needed.
+    Check(strstr(buf, "device      axis  window") != nullptr, "the header names the axis column");
     Check(strstr(buf, "most recent 6 messages") != nullptr, "file states how many it holds");
+  }
+
+  // --- the axis column really separates the two wheels ---
+  {
+    WheelLog lg;
+    lg.Init(kOutPath, kTmpPath);
+    for (int i = 0; i < 3; ++i)
+    {
+      WheelLogRec r;
+      ZeroMemory(&r, sizeof(r));
+      r.delta = (i == 1) ? 15 : 120; // one sub-notch value in the middle
+      r.dev = 1;
+      r.horiz = (i == 2) ? 1 : 0; // the third message is the HORIZONTAL wheel
+      lg.Record(r, i * 0.01);
+    }
+    lg.Flush("# probe\n");
+    char buf[8192] = {0};
+    FILE *f = fopen(kOutPath, "rb");
+    if (f)
+    {
+      size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+      buf[n] = 0;
+      fclose(f);
+    }
+    Check(strstr(buf, "  V  ") != nullptr, "a vertical message is written as V");
+    Check(strstr(buf, "  H  ") != nullptr, "a horizontal message is written as H");
   }
 
   // --- the gesture-end signal that decides when to write ---
@@ -155,6 +185,75 @@ int main()
     bad.Init("Z:\\definitely\\not\\here\\wl.txt", "Z:\\definitely\\not\\here\\wl.tmp");
     Check(!bad.Ready(), "an unwritable path -> not Ready()");
     Check(bad.PathKnownButReadOnly(), "an unwritable path -> reported read-only");
+  }
+
+  // --- THE SEND RECORD: the half that answers "the view moved and came back" ---
+  //
+  // A SEND ring independent of the wheel ring, so a burst of sends cannot push the wheel evidence
+  // out of the file; oldest-first order under wrap; and the file must print the signed units plus the
+  // encoded (val, valhw) that REAPER actually receives. Sign is the whole point: a reversed pair in
+  // that column IS the reported bug, and it is invisible anywhere else in the file.
+  {
+    WheelLog lg;
+    lg.Init(kOutPath, kTmpPath);
+    Check(lg.SendCount() == 0, "a fresh log holds no sends");
+
+    for (int i = 0; i < 3; ++i)
+    {
+      SendLogRec s;
+      ZeroMemory(&s, sizeof(s));
+      s.section = 0;
+      s.command = 989;
+      s.units = (i == 2) ? -1.0 : 1.0; // the third send goes the OTHER way
+      s.val = (i == 2) ? 127 : 1;
+      s.valhw = -1;
+      s.topUp = (i == 2) ? 1 : 0;
+      s.accum = 0.0;
+      lg.RecordSend(s, i * 0.01);
+    }
+    Check(lg.SendCount() == 3, "three sends are held");
+    Check(lg.SendAt(0).units == 1.0, "the oldest send is read first");
+    Check(lg.SendAt(2).units == -1.0, "the newest send is read last");
+    Check(lg.SendAt(2).topUp == 1, "the top-up flag survives");
+    Check(lg.SendAt(1).gapMs > 9.0 && lg.SendAt(1).gapMs < 11.0,
+          "a send's gap is measured from the previous SEND");
+
+    lg.Flush("# probe\n");
+    char buf[16384] = {0};
+    FILE *f = fopen(kOutPath, "rb");
+    if (f)
+    {
+      size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+      buf[n] = 0;
+      fclose(f);
+    }
+    Check(strstr(buf, "sends: every call that reached REAPER") != nullptr,
+          "the file has a sends section");
+    Check(strstr(buf, "topup") != nullptr, "the sends table names the top-up column");
+    Check(strstr(buf, "-1.0000") != nullptr, "a reversed send prints its NEGATIVE amount");
+    Check(strstr(buf, "the most recent 3 sends") != nullptr, "the sends section states its count");
+  }
+
+  // --- a wheel record and a send record do not evict each other ---
+  {
+    WheelLog lg;
+    lg.Init(kOutPath, kTmpPath);
+    WheelLogRec w;
+    ZeroMemory(&w, sizeof(w));
+    w.delta = 120;
+    w.dev = 1;
+    lg.Record(w, 0.0);
+    for (int i = 0; i < WheelLog::kMaxSends + 5; ++i)
+    {
+      SendLogRec s;
+      ZeroMemory(&s, sizeof(s));
+      s.command = 989;
+      s.units = 1.0;
+      lg.RecordSend(s, 0.01 * (i + 1));
+    }
+    Check(lg.Count() == 1, "a burst of sends does not evict the wheel record");
+    Check(lg.SendCount() == WheelLog::kMaxSends, "the send ring caps at kMaxSends");
+    Check(lg.SendAt(0).units == 1.0, "the send ring still reads oldest-first after wrapping");
   }
 
   printf("\n%s\n", failures ? "FAIL" : "OK: ring order, wrap, gaps, tally and file text all hold");

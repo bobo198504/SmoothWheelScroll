@@ -34,6 +34,34 @@ recordtmp/
 # Local REAPER deployment target, if you keep one
 deploy.local.sh
 
+# ---------------------------------------------------------------------------
+# THE APEX PROJECT DOES NOT LIVE HERE ANY MORE (split on 2026-09-18).
+#
+# It grew into its own program -- its own UI, its own build, its own gates -- and moved to
+# D:\Projects\Code\Apex. These paths are listed so that a stray copy cannot quietly reappear in this
+# repository, where it would be built by the wrong script and checked by the wrong tests. If you find
+# yourself putting one of these back, it belongs in the other project.
+#
+# The one thing the two share is the MODEL, and that is a deliberate COPY rather than a link: the plugin
+# keeps the original in src/, Apex keeps a copy in shared/, and Apex's test/check_model_sync.sh compares
+# them. Nothing here needs to know about it.
+# ---------------------------------------------------------------------------
+/app/
+/icon/
+/tools/
+/spike.txt
+_diag/apex_*.cpp
+_diag/apex_*.js
+_diag/app_*.cpp
+_diag/caption_brightness.ps1
+_diag/mkscratch.ps1
+_diag/thread_owner.cpp
+_diag/webview_spike.cpp
+_diag/DARK_TITLEBAR.md
+_diag/UI_DECISION.md
+test/check_apex_*.sh
+test/check_app_*.sh
+
 # OS / editor noise
 Thumbs.db
 desktop.ini
