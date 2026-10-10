@@ -10,10 +10,10 @@
 //       the flag now) -- this probe keeps it fixed. It is NOT part of the horizontal-wheel feature:
 //       it is what lets Shift+vertical-wheel drive 977/988 at all, so it stays even though the
 //       feature it was found through does not.
-//   (b) WM_MOUSEHWHEEL was never watched. Watching it IS the horizontal-wheel feature, and that
-//       feature is UNVERIFIED -- no device was available to measure what a tilt/thumb wheel really
-//       reports or how the classifier reads it -- so 1.7.4 ships WITHOUT it. This probe asserts that
-//       it is absent, so bringing it back is a deliberate act.
+//   (b) WM_MOUSEHWHEEL was never watched. Watching it IS the horizontal-wheel feature: it was written
+//       for 1.7.4, held out of that release because nothing was available to measure on, and restored
+//       for 1.7.5 after a forum tester reported a tilt/thumb wheel working normally. This probe
+//       asserts the handler EXISTS, so removing it by accident fails here.
 //
 // It includes the REAL src/routing.h, so it tests the shipped rule, not a copy.
 
@@ -142,20 +142,20 @@ int main()
     }
     printf("  non-comment mentions: %d   of which message COMPARISONS: %d\n", mentions, compares);
 
-    // 1.7.4 SHIPS WITHOUT THE HORIZONTAL WHEEL. The feature is written but unverified -- no device
-    // was available to measure the message's real delta shape or how the classifier reads it -- so it
-    // is out of the release. This assertion states that shipping decision, so re-adding the handler is
-    // a deliberate act that has to come with re-enabling this check.
-    Check(compares == 0, "(b) no handler compares against WM_MOUSEHWHEEL -- as 1.7.4 ships");
-    printf("      (a DEV-log help string and an explanatory comment may still name it; neither\n");
-    printf("       handles anything, which is why the check asks for the comparison)\n");
+    // 1.7.5 SHIPS WITH THE HORIZONTAL WHEEL. The branch was written for 1.7.4, held out of that
+    // release because there was no device to measure on, and put back once a forum tester confirmed a
+    // tilt/thumb wheel behaves normally. This assertion is what makes its ABSENCE detectable: delete
+    // the handler and the probe fails, so the feature cannot be dropped by accident.
+    Check(compares > 0, "(b) a handler COMPARES against WM_MOUSEHWHEEL -- as 1.7.5 ships");
+    printf("      (the check asks for the comparison, not the name: a comment or a DEV-log help\n");
+    printf("       string naming the constant must not be able to satisfy it)\n");
   }
 
   printf("\n");
   if (g_fail == 0)
   {
-    printf("OK: the table declares the horizontal actions relative and the name rule agrees, and\n"
-           "    the horizontal WHEEL itself is deliberately NOT wired up in this release.\n");
+    printf("OK: the horizontal wheel is a first-class stream -- the table declares its actions\n"
+           "    relative, the name rule agrees, and the message hook watches WM_MOUSEHWHEEL.\n");
     return 0;
   }
   printf("FAIL: %d check(s).\n", g_fail);

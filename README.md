@@ -22,6 +22,7 @@
 |---|---|
 | 名字带 `mousewheel` 的动作 | 按**动作名**匹配，含自定义 / 重绑的快捷键（**特殊动作除外，如翻页**）|
 | 自定义动作 | 由上述动作组成的宏，整体缓动 |
+| 水平滚轮（倾斜轮 / 拇指轮） | 与竖直滚轮同等处理，两个轮子的判定互不干扰 |
 
 ## 原生放行事件
 
@@ -39,7 +40,7 @@ Windows x64，REAPER 7。
 2. 放进 `UserPlugins`：便携版 `<REAPER>/UserPlugins/`，普通安装 `%APPDATA%\REAPER\UserPlugins\`。
 3. 重启 REAPER。
 
-加载后显示为 `Smooth Wheel Scroll 1.7.4`。
+加载后显示为 `Smooth Wheel Scroll 1.7.5`。
 
 ### 设置面板
 
