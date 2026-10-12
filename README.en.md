@@ -12,6 +12,24 @@ A native REAPER extension that turns wheel-driven scrolling and zooming into a s
   <img src="test/demo.gif" alt="Smooth Wheel Scroll demo" width="880">
 </p>
 
+## What it fixes
+
+In REAPER one wheel notch **jumps the view a whole step at once** — harsh, jumpy, tiring to watch.
+This extension **spreads that notch over a short animation**, so scrolling feels like a trackpad.
+
+**Looking for any of these? This is it** (search terms):
+
+* REAPER mouse wheel **not smooth** / **jumpy** / **stuttery** / **jerky**
+* REAPER **smooth scrolling**, **inertial scrolling**, **scroll easing**, **wheel animation**
+* REAPER **zoom too fast** / want to **adjust wheel speed** or **scroll distance**
+* REAPER **horizontal scroll**, **tilt wheel**, **thumb wheel** (Logitech MX Master side wheel, …)
+* REAPER **trackpad scrolling** not smooth / want the trackpad left alone
+* REAPER arrange view scrolls **too little when zoomed out** (track rows shrink)
+
+> Keywords: `REAPER smooth scroll`, `REAPER mouse wheel`, `REAPER tilt wheel`,
+> `REAPER horizontal scroll`, `REAPER inertial scrolling`, `REAPER zoom smoothing`,
+> `REAPER scroll animation`, `REAPER trackpad`, `REAPER extension`, `reaper_smoothwheelscroll`.
+
 The plugin intercepts one notch of the wheel, turns it into an animation, and feeds the result to the
 **same REAPER action** in small pieces over time. It never moves a view or changes REAPER state: zoom
 anchoring, scroll ranges, step sizes and user-customized rules all stay as REAPER defines them.
@@ -26,11 +44,40 @@ anchoring, scroll ranges, step sizes and user-customized rules all stay as REAPE
 | Custom actions | a macro built from the above is smoothed as a whole |
 | Horizontal wheel (tilt wheel / thumb wheel) | treated like the vertical wheel; the two are classified independently |
 
+**Coverage** (all smoothed without per-item setup):
+
+* **Arrange view** — vertical scroll, horizontal scroll, vertical zoom, horizontal zoom
+  (including the default Ctrl / Alt + wheel bindings)
+* **MIDI editor** — vertical/horizontal scroll and zoom (including the wheel over the piano keys)
+* **Track control panel (TCP), mixer (MCP)** — panel scrolling and the dividers on either side
+* **Modifier + wheel** combinations everywhere above, and **custom actions / macros** built from them
+
 ## Events passed through natively
 
 * **Parameter-type wheels** — faders, knobs, tempo, send amounts, note velocity, dropdowns.
 * **Lists** — whole-row movement, already instant natively.
 * **Touchpads, touch, pen** — passed to REAPER untouched.
+
+## FAQ
+
+**Can the feel be adjusted?** Yes — the panel has four sliders (animation length, slow-step size,
+ramp-up, top speed). Changes apply instantly and save automatically.
+
+**Does it change zoom anchoring or scroll ranges?** No. It only hands the value to the action REAPER
+would already have used, which applies its own rules.
+
+**Can I turn it off?** Yes — a master switch. Off means **full pass-through**: the wheel behaves
+exactly as it did before.
+
+**Are free-spinning wheels (MagSpeed, etc.) supported?** Yes. The plugin counts **the amount the wheel
+actually reports**, so a free-spinning wheel and a notched one feel the same at the same hand speed.
+**Horizontal wheels are common on those mice** (e.g. the MX Master side wheel).
+
+**Will my touchpad be smoothed?** No. Touchpad, touch and pen input is passed to REAPER untouched.
+
+**How is this different from the scrolling scripts on ReaPack?** Those are **actions/scripts** you bind
+or trigger. This is an **extension (DLL)**: install it and the whole wheel path is affected, with
+**nothing about what the wheel does changed**.
 
 ---
 
