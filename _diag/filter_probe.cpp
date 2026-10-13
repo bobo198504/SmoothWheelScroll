@@ -6,7 +6,8 @@
 //
 // WHAT THE RULE ACTUALLY IS:
 //   * the MIDI editor's VERTICAL axis: SCROLL -> whole units, ZOOM -> immediate, HORIZONTAL -> stream
-//   * the MAIN section's VERTICAL actions 989/978/1000/1001 -> whole units
+//   * the MAIN section's VERTICAL actions 989/978/1000/1001 -> whole units (the vertical zoom was
+//     tried as a fine stream on 2026-10-13 and reverted the same day -- see the invariant below)
 //   * the MAIN section's HORIZONTAL PAN 988/977 -> whole units (a pixel pan discards sub-unit
 //     pieces; measured on both a touchpad and a notched mouse -- AGENTS.md 104)
 //   * everything else -- including the horizontal ZOOM (990/979) and name-only matches -> stream
@@ -47,8 +48,8 @@ static Delivery Expect(int section, int command, Axis ax, Kind kd)
   }
   // Main view: the FOUR known VERTICAL ids (scroll and zoom) and the two HORIZONTAL PAN ids are
   // whole-unit receivers. Everything else -- the horizontal ZOOM, and any action matched only by name
-  // -- is the fine stream. (The vertical zoom went to the stream in AGENTS.md 109 and was REVERTED in
-  // 110: a fine grid makes this axis jitter and a slow zoom not move at all.)
+  // -- is the fine stream. (The vertical zoom was tried as a fine stream on 2026-10-13 and reverted
+  // the same day: it stalls in the middle of the gesture on this axis.)
   if (command == 989 || command == 978 || command == 1000 || command == 1001)
     return Delivery::kStepUnits;
   if (command == 988 || command == 977)
@@ -106,7 +107,11 @@ int main()
 
   // Cross-checks stated as invariants (not tied to a specific id list).
   if (FilterFor(kSectionMain, 989, Axis::kVertical, Kind::kScroll) != Delivery::kStepUnits) ++bad;
-  // The vertical zoom is whole units TOO (as 1.6.1 had it; a fine stream was tried and reverted).
+  // ★ MEASURED 2026-10-13: the vertical zoom was switched to kStream and REVERTED the same day. In
+  // use it showed a STALL IN THE MIDDLE of the gesture and read as not linear, because this axis
+  // does not act on values below its own granularity -- and a fine stream spends most of the gesture
+  // there. That is the effect AGENTS 109 recorded; 2026-10-13 re-derived it by measuring, which is
+  // why this line is now a conclusion rather than a note. DO NOT flip it on a quick trial.
   if (FilterFor(kSectionMain, 1000, Axis::kVertical, Kind::kZoom) != Delivery::kStepUnits) ++bad;
   if (FilterFor(kSectionMain, 1001, Axis::kVertical, Kind::kZoom) != Delivery::kStepUnits) ++bad;
   // ★ THE HORIZONTAL PAN IS WHOLE UNITS, the horizontal ZOOM is the fine stream (AGENTS.md 104):

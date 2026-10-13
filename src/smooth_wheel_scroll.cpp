@@ -2199,7 +2199,32 @@ static void DeliverTravel(Integrator &g, double step)
 
   bool sent = false;
   DeliverOne(g, step, ActionSpec{g.section, g.command}, g.accum, sent);
-  (void)sent;
+  // RECORD WHETHER THIS GESTURE HAS SENT ANYTHING (reported by poydepzaj1616, 2026-10-13).
+  //
+  // This used to be `(void)sent;` -- the flag was thrown away, so `sentThisBurst` stayed false for
+  // every single-action gesture. The end-of-gesture top-up in Tick is guarded by `!sentThisBurst`
+  // ("a gesture that never reached a whole unit"), so it fired after EVERY gesture, not only after
+  // the ones that really sent nothing.
+  //
+  // MEASURED IN THE DEV LOG (18:28:06, one notch of cmd 977, amount = -2.7143 units):
+  //
+  //     06.789  burst  accum=-0.46327  sent=0
+  //     06.803  replay val=127                       <- unit 1 of 4
+  //     06.813  burst  accum=+0.41191  sent=1        <- sent WAS true, and was discarded
+  //     06.913  replay val=127                       <- unit 2
+  //     07.022  replay val=127                       <- unit 3
+  //     07.038  replay val=127                       <- unit 4
+  //     07.049  top-up -> one unit BACK              <- a 5th send, in the OPPOSITE direction
+  //
+  // So one notch of travel was delivered as four units and then a fifth one backwards. With the flag
+  // recorded the top-up is suppressed for a gesture that already delivered, and the notch delivers
+  // its own 2.71 units as four -- which is what rounding that travel should produce.
+  //
+  // The macro path below already did this (`||=`); only this single-action path dropped it.
+  g.sentThisBurst = g.sentThisBurst || sent;
+  if (kDebugLog)
+    Log("burst sent=%d burst=%d accum=%.5f delivery=%d cmd=%d", (int)sent, (int)g.sentThisBurst,
+        g.accum, (int)g.delivery, g.command);
 
   if (g.drive == DRIVE_MCP_WHEEL)
   {
@@ -6479,9 +6504,9 @@ extern "C" __declspec(dllexport) int ReaperPluginEntry(HINSTANCE hInst, reaper_p
   // has to make it obvious which one REAPER is running -- both in the Extensions list and in a
   // user's screenshot, which is often all we get.
 #ifdef SWS_WHEEL_LOG
-  rec->Register("ext_name", (void *)"Smooth Wheel Scroll 1.7.5 DEV (wheel log)");
+  rec->Register("ext_name", (void *)"Smooth Wheel Scroll 1.7.6 DEV (wheel log)");
 #else
-  rec->Register("ext_name", (void *)"Smooth Wheel Scroll 1.7.5");
+  rec->Register("ext_name", (void *)"Smooth Wheel Scroll 1.7.6");
 #endif
   rec->Register("ext_vendor", (void *)"SmoothWheelScroll");
 

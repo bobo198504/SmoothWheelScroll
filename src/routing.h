@@ -276,12 +276,25 @@ inline Delivery FilterFor(int section, int command, Axis axis, Kind kind)
     case 989: // View: Scroll vertically
     case 978: // View: Scroll vertically reversed
       return Delivery::kStepUnits;
-    // 1000/1001 (vertical ZOOM) is WHOLE UNITS, exactly as 1.6.1 had it and as the user confirmed is
-    // correct. A fine stream was tried here (AGENTS.md 109) and REVERTED (AGENTS.md 110): the finest
-    // grid makes this axis JITTER -- the receiver cannot act on a sub-unit step, so consecutive values
-    // cancel against each other and a slow zoom simply does not move (AGENTS.md 21 measured this same
-    // thing years earlier; 109 was a rediscovery of the bug). Its travel is also made constant
-    // (FullTravelFor / kZoomStepDeltas), so it never lumps or stalls.
+    // ★ 1000/1001 (vertical ZOOM) IS WHOLE UNITS -- tried as a fine stream on 2026-10-13 and
+    // REVERTED the same day, so this is now a MEASURED conclusion rather than an inherited one.
+    //
+    // WHAT WAS TRIED AND WHAT WAS SEEN. The axis was switched to kStream because one notch is 2.28
+    // units and the whole-unit grid delivered it as two `val=127` steps, which reads as "it just
+    // steps". The first impression was favourable ("很丝滑"), but using it for a while showed the
+    // problem the fine stream actually has here: "there is a STALL IN THE MIDDLE, and it is not
+    // linear enough". That is this axis refusing to act on the small values -- the fine stream
+    // spends much of the gesture below what the receiver can move on, so the motion pauses and then
+    // catches up. It is the same effect AGENTS 109 recorded and 110 reverted; the difference this
+    // time is that it was re-derived on purpose, by measuring, instead of being taken on trust.
+    //
+    // WHY THE FIRST IMPRESSION WAS MISLEADING, and the lesson: a fine stream looks smoother in the
+    // hand for a short test, because the steps are smaller. What it cannot do is make the axis move
+    // when the value is below its own granularity -- and on THIS axis that is most of the gesture.
+    // ⚠️ DO NOT SWITCH THIS AXIS TO kStream AGAIN on the strength of a quick trial.
+    //
+    // The vertical SCROLL below is whole units for a related reason (the row-height gain makes its
+    // travel track the track height), and it was NOT part of this experiment.
     case 1000: // View: Zoom vertically
     case 1001: // View: Zoom vertically reversed
       return Delivery::kStepUnits;
