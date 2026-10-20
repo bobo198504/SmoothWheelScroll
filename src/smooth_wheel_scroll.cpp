@@ -179,6 +179,7 @@ static const double kStartMin = 1.0;
 static const double kStartMax = 10.0; // upper limit set by the user: a slow step of at most 10 deltas
 static const double kDefaultStart = 5.0;
 
+
 static double g_budgetDeltas = 1000.0;
 static const double kBudgetMin = 60.0;
 static const double kBudgetMax = 2000.0;
@@ -596,6 +597,33 @@ static bool g_timerPeriodRaised = false; // whether timeBeginPeriod(1) is active
 // unchanged against the frozen 1.6.1 behaviour in test/expected/routes_before.txt.
 // ---------------------------------------------------------------------------
 #include "routing.h"
+
+// ---------------------------------------------------------------------------
+// PER-SURFACE SPEED knobs (see Surface in routing.h for WHICH five and WHY).
+//
+// One multiplier per kind of view, applied to the TRAVEL before it enters the model. 1.0 is the
+// behaviour before this feature, so the defaults change nothing; the range is 0.5x..3.0x and is
+// clamped in one place (ClampSurfaceSpeed).
+//
+// WHY A MULTIPLIER ON THE TRAVEL AND NOT ON WHAT IS DELIVERED: scaling the input scales the whole
+// gesture -- the glide keeps its shape (same windows, same easing), the row-height gain and both
+// delivery grids still see a normal amount, and the end-of-gesture top-up still fires on the same
+// condition. Scaling the OUTPUT instead would have to fight the whole-unit grid and the top-up, and
+// would change the feel of the glide rather than its distance.
+//
+// WHERE IT IS APPLIED, exactly: Kick() -- to `amount` for the window model, and to `unit*units` for
+// the 1.6.1 vertical-zoom model -- after the base travel is computed and before the MCP delta
+// conversion, so the mixer knob works too.
+static double g_surfaceSpeed[kSurfaceCount] = {1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0};
+
+static double SurfaceSpeed(Surface s)
+{
+  const int i = (int)s;
+  if (i < 0 || i >= kSurfaceCount)
+    return kSurfaceSpeedDefault;
+  return ClampSurfaceSpeed(g_surfaceSpeed[i]);
+}
+
 // Which DEVICE sent a wheel (notched / free-spinning / touchpad). Pure arithmetic, no REAPER.
 #include "device.h"
 // Parsing a "Custom:" action's definition out of reaper-kb.ini. Pure text, no REAPER.
@@ -1068,6 +1096,31 @@ static void SaveSettings()
   SetExtState(kStateSection, "budget", buf, true);
   _snprintf(buf, sizeof(buf), "%.6f", g_speedMul);
   SetExtState(kStateSection, "speedmul", buf, true);
+  // The per-surface speed knobs. One key each, named by the Surface enum order:
+  //   spd0 = main pan V, spd1 = main pan H, spd2 = main zoom V, spd3 = main zoom H,
+  //   spd4 = MIDI pan H, spd5 = MIDI zoom V, spd6 = MIDI zoom H, spd7 = mixer
+  // (stored under separate keys rather than one packed string so a missing key keeps its default
+  // and a corrupt one cannot take the others with it).
+  //
+  // ★ THE `s` PREFIX IS A STORAGE VERSION, and it matters: the enum lost a member when MIDI vertical
+  // pan dropped out, so indices 4.. shifted down by one. Reading the old spd4..spd8 keys under the
+  // new indices would silently apply one view's setting to another -- the exact kind of drift that
+  // is invisible until someone complains the wrong view is fast. A new prefix leaves the old keys
+  // unread (they are cleared below) and every knob starts at 1.0x.
+  for (int i = 0; i < kSurfaceCount; ++i)
+  {
+    char key[16];
+    _snprintf(key, sizeof(key), "sspd%d", i);
+    _snprintf(buf, sizeof(buf), "%.6f", SurfaceSpeed((Surface)i));
+    SetExtState(kStateSection, key, buf, true);
+  }
+  // Retire the previous key names (written by the 9-knob and 5-knob versions).
+  for (int i = 0; i < 16; ++i)
+  {
+    char key[16];
+    _snprintf(key, sizeof(key), "spd%d", i);
+    SetExtState(kStateSection, key, "", true);
+  }
   // Clear the key the short-lived "Keep size" slider used. The mechanism is now a fixed constant, so
   // a stored value would be a setting that does nothing -- exactly the kind of stale entry the other
   // cleared keys above exist to avoid.
@@ -1159,6 +1212,8 @@ static void LoadSettings()
   g_startDeltas = kDefaultStart;
   g_budgetDeltas = kDefaultBudget;
   g_speedMul = kDefaultSpeedMul;
+  for (int i = 0; i < kSurfaceCount; ++i)
+    g_surfaceSpeed[i] = kSurfaceSpeedDefault;
   g_glideOn = true;
   g_touchpadReverse = true;
 
@@ -1167,6 +1222,16 @@ static void LoadSettings()
   if (LoadDouble("startd", &v)) g_startDeltas = v;
   if (LoadDouble("budget", &v)) g_budgetDeltas = v;
   if (LoadDouble("speedmul", &v)) g_speedMul = v;
+  // The per-surface knobs: a missing key keeps 1.0 (the pre-feature behaviour), and whatever is
+  // stored goes through ClampSurfaceSpeed, so a hand-edited or out-of-range value cannot reach the
+  // model out of bounds.
+  for (int i = 0; i < kSurfaceCount; ++i)
+  {
+    char key[16];
+    _snprintf(key, sizeof(key), "sspd%d", i);
+    if (LoadDouble(key, &v))
+      g_surfaceSpeed[i] = ClampSurfaceSpeed(v);
+  }
 
   // THE DEFAULTS WERE RETUNED (2026-09-16, see kDefaultWindowMs). A store written under the old
   // defaults would otherwise keep showing them, and "the default changed" would look ignored. So the
@@ -1954,6 +2019,17 @@ static void Kick(Integrator &g, const Route &route, double wheelSign, double uni
   const double notchDeltas =
       model::Travel(recvDeltas, budget, g_budgetDeltas, g_startDeltas, g_speedMul);
 
+  // ★ THE PER-SURFACE SPEED KNOB. One multiplier for this action's view (see Surface in routing.h),
+  // applied HERE -- to the base travel, before either model and before the MCP delta conversion -- so
+  // every downstream mechanism sees a normal amount and only the DISTANCE changes. 1.0 is the
+  // default and leaves every number below bit-for-bit as it was.
+  //
+  // A MACRO takes its first child's surface (route.spec carries it for exactly this kind of axis
+  // choice; see the zoom161 note below for the same pattern). A macro's children can sit on
+  // different surfaces, and there is only one travel to scale, so the first child decides -- the
+  // alternative is a different multiplier per child, which is a bigger change than this feature is.
+  const double surfaceMul = SurfaceSpeedFor(route.spec, g_surfaceSpeed);
+
   // THE MAIN VIEW'S VERTICAL ZOOM runs on the 1.6.1 CURVE MODEL (AGENTS.md 111). It is a SUSTAINED
   // gesture, not a per-notch amount: each notch STACKS a claim and the speed climbs toward a ceiling
   // over the rise time. That is why the whole message goes in as ONE notch of travel (`unit*units`,
@@ -1990,7 +2066,8 @@ static void Kick(Integrator &g, const Route &route, double wheelSign, double uni
     g.glide161 = (&g == &g_horz) ? &g_horz161 : &g_vert161;
     if (wasActive && !g.glide161->Active())
       g.accum = 0.0; // previous gesture drained: drop any stale carry
-    g.glide161->Kick(unit * units, sign, section * 100000 + command, now, Zoom161Params());
+    g.glide161->Kick(unit * units * surfaceMul, sign, section * 100000 + command, now,
+                     Zoom161Params());
     if (!sameOp)
       g.accum = 0.0; // new operation: no carry leaks across
     if (kDebugLog)
@@ -2000,7 +2077,7 @@ static void Kick(Integrator &g, const Route &route, double wheelSign, double uni
   }
 
   const double scale = (recvDeltas > 0.0) ? (notchDeltas / recvDeltas) : 1.0;
-  const double amount = sign * unit * units * scale; // the amount actually handed over
+  const double amount = sign * unit * units * scale * surfaceMul; // the amount actually handed over
 
   if (!sameOp)
   {
@@ -2020,8 +2097,11 @@ static void Kick(Integrator &g, const Route &route, double wheelSign, double uni
   g.glide.Feed(amount, AnimParams(gapMs));
 
   if (kDebugLog)
-    Log("kick drive=%d cmd=%d units=%.2f amount=%.4f (notch=%.1fd budget=%.0fd) window=%.0fms in-flight=%d",
-        (int)drive, command, units, amount, notchDeltas, budget, g_windowMs, g.glide.InFlight());
+    Log("kick drive=%d cmd=%d sect=%d ax=%d kind=%d surf=%d mul=%.2f units=%.2f amount=%.4f "
+        "(notch=%.1fd budget=%.0fd) window=%.0fms in-flight=%d",
+        (int)drive, command, section, (int)route.spec.axis, (int)route.spec.kind,
+        (int)SurfaceFor(route.spec), surfaceMul, units, amount, notchDeltas, budget, g_windowMs,
+        g.glide.InFlight());
 
   // Release shorter than the timer can express, or a receiver where a coast has nowhere to land:
   // hand the whole amount over at once and skip the window.
@@ -3741,6 +3821,10 @@ enum
   IDC_S_BASE = 1010,
   IDC_L_BASE = 1110,
   IDC_K_BASE = 1210,
+  // The per-surface speed knobs, one row of them under the four sliders (see Surface in routing.h),
+  // and the static caption that sits beside each dial.
+  IDC_P_BASE = 1310,
+  IDC_PL_BASE = 1320,
 };
 
 // How many controls the panel has. BuildSliderSpecs is the ONE place a control is described; adding
@@ -3751,6 +3835,7 @@ static const int kNumSliders = 4;
 static int SliderIdOf(int i) { return IDC_S_BASE + i; }
 static int LabelIdOf(int i) { return IDC_L_BASE + i; }
 static int KnobIdOf(int i) { return IDC_K_BASE + i; }
+static int SurfaceKnobIdOf(int i) { return IDC_P_BASE + i; }
 
 // ONE ROW DESCRIBES ONE CONTROL, completely: the slider, its label, its knob, its colour and its
 // default. BuildSliderSpecs is the only place any of that is written down, and the ids are computed
@@ -3793,8 +3878,56 @@ struct KnobSpec
   double min, max;
   const char *name;
 };
-static KnobSpec g_knobs[kNumSliders];
-static int g_knobPos[kNumSliders]; // 0..1000 per knob, parallel to g_knobs
+// Knob slots: one per slider row (none of the four use one today), then ONE PER SURFACE. The
+// surface knobs are ordinary entries in these arrays on purpose -- KnobProc, KnobPaint, the drag,
+// the double-click reset and the keyboard all work off the index, so putting them here means every
+// one of those behaviours is inherited instead of re-implemented. Only their LAYOUT differs (see
+// LayoutSurfaceKnobs).
+static const int kTotalKnobs = kNumSliders + kSurfaceCount;
+static const int kFirstSurfaceKnob = kNumSliders;
+static KnobSpec g_knobs[kTotalKnobs];
+static int g_knobPos[kTotalKnobs]; // 0..1000 per knob, parallel to g_knobs
+
+// How many lines the surface-knob strip needed at the last layout, so the panel's content height
+// can include it.
+static int g_surfKnobRows = 1;
+
+// The five surface knobs, drawn like the ones 1.6.1 had: a small square dial with its caption as a
+// static label beside it (not text painted inside the control).
+static int SurfaceLabelIdOf(int s) { return IDC_PL_BASE + s; }
+
+// Write each surface caption: the view's name and its current multiplier, e.g. "MIDI zoom 1.25x".
+// Called whenever a value changes and after the layout, so the text can never lag the dial.
+static void UpdateSurfaceLabels(HWND panel)
+{
+  // THE CAPTIONS USE REAPER'S OWN ACTION NAMES, not invented ones: the user asked for exactly that,
+  // so each caption is the action's own name with REAPER's "View: " prefix dropped, with the view
+  // it belongs to said first.
+  //
+  //   Main view  : "Scroll vertically / horizontally", "Zoom vertically / horizontally"
+  //   MIDI editor: three of the four -- its VERTICAL SCROLL has no knob (see the note on Surface in
+  //               routing.h: that axis quantizes to a whole pitch row, so a bigger factor only makes
+  //               each send coarser instead of moving faster)
+  //   Mixer      : "Scroll MCP" -- REAPER's own name for the mixer wheel context
+  static const char *sects[kSurfaceCount] = {"Main", "Main", "Main", "Main",
+                                             "MIDI", "MIDI", "MIDI", ""};
+  static const char *names[kSurfaceCount] = {
+      "Scroll vertically", "Scroll horizontally", "Zoom vertically", "Zoom horizontally",
+      "Scroll horizontally", "Zoom vertically", "Zoom horizontally", "Scroll MCP"};
+  for (int s = 0; s < kSurfaceCount; ++s)
+  {
+    HWND lab = panel ? GetDlgItem(panel, SurfaceLabelIdOf(s)) : nullptr;
+    if (!lab)
+      continue;
+    char buf[96];
+    const double v = SurfaceSpeed((Surface)s);
+    if (sects[s][0])
+      _snprintf(buf, sizeof(buf), "%s %s %.2fx", sects[s], names[s], v);
+    else
+      _snprintf(buf, sizeof(buf), "%s %.2fx", names[s], v);
+    SetWindowTextA(lab, buf);
+  }
+}
 
 // Blend between the panel background and the hue by `amount` (0..1). Amount 0 gives a colour
 // barely off the background (the faint end) rather than the background itself, so the hue is
@@ -3865,6 +3998,11 @@ static int ValueToKnob(int i)
   const KnobSpec &k = g_knobs[i];
   if (k.max <= k.min)
     return 0;
+  // The surface dials are PIECEWISE LOGARITHMIC so that 1.0x -- their default -- sits at twelve
+  // o'clock (see SurfaceKnobPosFromValue in routing.h). Every other knob, including all four slider
+  // knobs, stays linear: their ranges are small and their natural midpoint is already the middle.
+  if (i >= kNumSliders)
+    return SurfaceKnobPosFromValue(*k.value);
   int p = (int)((*k.value - k.min) / (k.max - k.min) * 1000.0 + 0.5);
   if (p < 0) p = 0;
   if (p > 1000) p = 1000;
@@ -3891,6 +4029,25 @@ static Theme g_theme = {0};
 // g_theme.card -- the curve and the faders both sit on the card, so that is what to blend with.
 static COLORREF SliderColor(int idx, double amount)
 {
+  // The five surface knobs have no slider row, so they have no hue in g_sliders. They get a fixed
+  // one here rather than falling through to g_theme.text: that fall-through is what made their
+  // POINTER invisible, because g_theme.text and the knob's own face are close enough at this size
+  // that a 2px line disappeared into it.
+  //
+  // (Written as `idx >= kNumSliders` rather than `>= kFirstSurfaceKnob` because this function is
+  // defined above that constant; the two are the same boundary and the knob arrays are sized
+  // kNumSliders + kSurfaceCount.)
+  if (idx >= kNumSliders)
+  {
+    if (amount < 0.0) amount = 0.0;
+    if (amount > 1.0) amount = 1.0;
+    const COLORREF bg = g_theme.card;
+    // A cool, saturated hue that reads against both the light and the dark card.
+    const COLORREF c = RGB(90, 170, 255);
+    return RGB((int)(GetRValue(bg) + (GetRValue(c) - GetRValue(bg)) * amount + 0.5),
+               (int)(GetGValue(bg) + (GetGValue(c) - GetGValue(bg)) * amount + 0.5),
+               (int)(GetBValue(bg) + (GetBValue(c) - GetBValue(bg)) * amount + 0.5));
+  }
   if (idx < 0 || idx >= kNumSliders)
     return g_theme.text;
   const double lo = 0.35, hi = 1.0; // never fully washed out, so the hue stays traceable
@@ -4154,6 +4311,8 @@ static void ResolveTheme()
       GetRValue(g_theme.faderThumb), GetGValue(g_theme.faderThumb), GetBValue(g_theme.faderThumb));
 }
 
+static void UpdateSurfaceLabels(HWND panel);
+
 static void UpdateLabels()
 {
   char buf[160];
@@ -4167,6 +4326,10 @@ static void UpdateLabels()
     _snprintf(buf, sizeof(buf), "%s: %.*f %s", s.name, dec, *s.value, s.unit);
     SetWindowTextA(GetDlgItem(g_cfgWnd, s.labelId), buf);
   }
+  // The five surface captions live here too: they read out the knob's value, so every path that
+  // changes a knob (drag, wheel, keys, double-click reset, a reload) goes through this and the text
+  // can never lag the dial.
+  UpdateSurfaceLabels(g_cfgWnd);
 }
 
 static void PushValuesToSliders()
@@ -4190,6 +4353,18 @@ static void PushValuesToSliders()
     if (k)
       InvalidateRect(k, nullptr, FALSE);
   }
+  // The five surface knobs are not part of a slider row, so they are pushed here: their values can
+  // be changed by a double-click reset or by the store being reloaded, and nothing else would repaint
+  // them. Their captions carry the value, so they are rewritten in the same pass.
+  for (int s = 0; s < kSurfaceCount; ++s)
+  {
+    const int slot = kFirstSurfaceKnob + s;
+    g_knobPos[slot] = ValueToKnob(slot);
+    HWND k = g_cfgWnd ? GetDlgItem(g_cfgWnd, g_knobs[slot].id) : nullptr;
+    if (k)
+      InvalidateRect(k, nullptr, FALSE);
+  }
+  UpdateSurfaceLabels(g_cfgWnd);
   g_cfgUpdating = was;
   UpdateLabels();
 }
@@ -4885,6 +5060,10 @@ static double KnobValue(int i)
 {
   const KnobSpec &k = g_knobs[i];
   const int pos = g_knobPos[i];
+  // Same split as ValueToKnob: the surface dials read their value back through the logarithmic
+  // mapping, so turning the dial round-trips exactly (position -> value -> position).
+  if (i >= kNumSliders)
+    return SurfaceValueFromKnobPos(pos);
   return k.min + (k.max - k.min) * (pos / 1000.0);
 }
 
@@ -4923,12 +5102,21 @@ static void KnobPaint(HWND h, int idx)
   DeleteObject(ob);
 
   // The pointer: 170 degrees each way from straight up. 0 = min is -170, 1000 = max is +170.
+  //
+  // DRAWN FROM NEAR THE CENTRE OUT TO THE EDGE, not centre-to-edge as one hairline: at the small
+  // size these surface knobs use, a centre-to-edge line reads as a dot on the right half but leaves
+  // the direction ambiguous when the knob is near the top. Starting a little inside the centre and
+  // running to the rim makes the direction read at any angle, and a 2px pen at this size is the
+  // difference between "there is a pointer" and "there is a smudge".
   const double ang = (-170.0 + 340.0 * (g_knobPos[idx] / 1000.0)) * 3.14159265358979 / 180.0;
-  const int px = cx + (int)(sin(ang) * (r - 2) + 0.5);
-  const int py = cy - (int)(cos(ang) * (r - 2) + 0.5);
+  const double inner = (r > 6.0) ? (r * 0.35) : 0.0;
+  const int ix = cx + (int)(sin(ang) * inner + 0.5);
+  const int iy = cy - (int)(cos(ang) * inner + 0.5);
+  const int px = cx + (int)(sin(ang) * (r - 1) + 0.5);
+  const int py = cy - (int)(cos(ang) * (r - 1) + 0.5);
   HPEN pen = CreatePen(PS_SOLID, 2, SliderColor(idx, 1.0));
   HGDIOBJ op = SelectObject(dc, pen);
-  MoveToEx(dc, cx, cy, nullptr);
+  MoveToEx(dc, ix, iy, nullptr);
   LineTo(dc, px, py);
   SelectObject(dc, op);
   DeleteObject(pen);
@@ -5143,7 +5331,14 @@ static PanelMetrics PanelMetricsNow()
 // this size the content fits, so none is shown. (3.0 has no response curve.)
 static int PanelIdealHeight(const PanelMetrics &m)
 {
-  return m.pad + m.headH * kSwitchLines + m.rowH * kNumSliders + m.monGap + m.monH + m.pad;
+  // The surface strip sits between the sliders and the chart: a dial is one row height, and each
+  // extra line adds one more. g_surfKnobRows is 1 before the first layout, which is the right
+  // reservation at the default width.
+  const int dial = (m.barH > 0) ? m.barH : 18;
+  const int rows = (g_surfKnobRows > 0) ? g_surfKnobRows : 1;
+  const int stripH = rows * dial + (rows - 1) * 4 + 4; // + the gap above the strip
+  return m.pad + m.headH * kSwitchLines + m.rowH * kNumSliders + stripH + m.monGap + m.monH +
+         m.pad;
 }
 
 // The narrowest client width at which the master switch's caption still fits on ONE line.
@@ -5300,9 +5495,64 @@ static void LayoutControls(HWND h)
   const int usableW = needScroll ? (w - barW) : w;
   const int y0 = -g_scrollY; // content coordinate 0 sits here
 
-  // The parameter monitor sits under the rows.
+  // ---- the per-surface speed knobs: a compact strip under the four sliders ----
+  //
+  // Sized like the knobs 1.6.1 had: a SMALL SQUARE (diameter = the row height) with its caption as a
+  // static label right beside it -- not a big cell with the text drawn inside. That is the look the
+  // user asked for ("小小的那种，配上对应的功能文字即可").
+  //
+  // As many cells per line as fit the usable width; the rest wrap, and g_surfKnobRows records how
+  // many lines were used so the content height includes them.
   {
-    const int my = y0 + m.pad + m.headH * kSwitchLines + m.rowH * kNumSliders + m.monGap;
+    const int dial = (m.barH > 0) ? m.barH : 18;
+    const int labelW = (int)(dial * 7.6 + 0.5); // room for "Scroll horizontally 1.00x"
+    const int cellW = dial + 4 + labelW;
+    const int gapX = 15; // the gap the user asked for
+    const int gapY = 4;
+    const int availW = usableW - m.pad * 2;
+    int perLine = (cellW > 0) ? (availW + gapX) / (cellW + gapX) : 1;
+    if (perLine < 1)
+      perLine = 1;
+    if (perLine > kSurfaceCount)
+      perLine = kSurfaceCount;
+    g_surfKnobRows = (kSurfaceCount + perLine - 1) / perLine;
+
+    const int stripY = y0 + m.pad + m.headH * kSwitchLines + m.rowH * kNumSliders + 2;
+    for (int s = 0; s < kSurfaceCount; ++s)
+    {
+      const int slot = kFirstSurfaceKnob + s;
+      const int r = s / perLine, c2 = s % perLine;
+      const int cellX = m.pad + c2 * (cellW + gapX);
+      const int cellY = stripY + r * (dial + gapY);
+
+      HWND k = GetDlgItem(h, g_knobs[slot].id);
+      if (!k)
+      {
+        k = CreateWindowExA(0, SWSC_KNOB_CLASS, "", WS_CHILD | WS_VISIBLE, 0, 0, 10, 10, h,
+                            (HMENU)(INT_PTR)g_knobs[slot].id, g_hInst, nullptr);
+        SetWindowLongPtrA(k, GWLP_USERDATA, (LONG_PTR)slot);
+      }
+      SetWindowPos(k, nullptr, cellX, cellY, dial, dial, SWP_NOZORDER);
+
+      // The caption: the surface's name and its current multiplier, in one line beside the dial.
+      HWND lab = GetDlgItem(h, SurfaceLabelIdOf(s));
+      if (!lab)
+        lab = CreateWindowExA(0, "STATIC", "", WS_CHILD | WS_VISIBLE | SS_LEFT | SS_CENTERIMAGE,
+                              0, 0, 10, 10, h, (HMENU)(INT_PTR)SurfaceLabelIdOf(s), g_hInst,
+                              nullptr);
+      SetWindowPos(lab, nullptr, cellX + dial + 4, cellY, labelW, dial, SWP_NOZORDER);
+    }
+    // Push the current text into the captions (the panel's own UpdateLabels does this on change).
+    UpdateSurfaceLabels(h);
+  }
+
+  // The parameter monitor sits under the rows AND the surface strip.
+  {
+    const int dial2 = (m.barH > 0) ? m.barH : 18;
+    const int rows2 = (g_surfKnobRows > 0) ? g_surfKnobRows : 1;
+    const int stripH2 = rows2 * dial2 + (rows2 - 1) * 4 + 4;
+    const int my = y0 + m.pad + m.headH * kSwitchLines + m.rowH * kNumSliders + stripH2 +
+                   (m.monGap - 4);
     g_monBlk = {m.pad, my, usableW - m.pad, my + m.monH};
   }
 
@@ -5399,6 +5649,7 @@ static void CreatePanelChildren(HWND h)
       SetWindowLongPtrA(k, GWLP_USERDATA, (LONG_PTR)i);
     }
   }
+
 
 
   (void)m;
@@ -5588,13 +5839,24 @@ static LRESULT CALLBACK CfgProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
   {
     // Double click on a knob: put THAT knob back to its default (the middle of its range).
     // Same targeted gesture as the faders.
-    for (int i = 0; i < kNumSliders; ++i)
+    //
+    // The SURFACE knobs are ordinary entries in g_knobs, so they are included. Their default is
+    // kSurfaceSpeedDefault (1.0x -- "what the plugin did before this feature"), not the middle of
+    // the 0.5..3.0 range, and not a SliderSpec field: they have no slider row to read it from.
+    for (int i = 0; i < kTotalKnobs; ++i)
     {
       if (g_knobs[i].id != (int)wp)
         continue;
-      // The knob's default also comes from the row (see SliderSpec), so it cannot be restored
-      // from the wrong entry.
-      *g_knobs[i].value = g_sliders[i].knobDef;
+      if (i >= kFirstSurfaceKnob)
+      {
+        *g_knobs[i].value = kSurfaceSpeedDefault;
+      }
+      else
+      {
+        // The knob's default also comes from the row (see SliderSpec), so it cannot be restored
+        // from the wrong entry.
+        *g_knobs[i].value = g_sliders[i].knobDef;
+      }
       g_knobPos[i] = ValueToKnob(i);
       if (HWND k = GetDlgItem(h, g_knobs[i].id))
         InvalidateRect(k, nullptr, FALSE);
@@ -5610,7 +5872,7 @@ static LRESULT CALLBACK CfgProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     if (g_cfgUpdating)
       return 0;
     const int cid = (int)wp;
-    for (int i = 0; i < kNumSliders; ++i)
+    for (int i = 0; i < kTotalKnobs; ++i)
     {
       if (g_knobs[i].id != cid)
         continue;
@@ -5945,6 +6207,26 @@ static void BuildSliderSpecs()
       g_knobs[i].name = "";
       g_knobPos[i] = 0;
     }
+  }
+
+  // ---- the five per-surface speed knobs (see Surface in routing.h) ----
+  //
+  // One per view, each a plain multiplier on that view's travel. Captions are short because the
+  // cells are narrow; the dial is what carries the value.
+  static const char *kSurfNames[kSurfaceCount] = {
+      "Main scroll vertically",   "Main scroll horizontally", "Main zoom vertically",
+      "Main zoom horizontally",   "MIDI scroll horizontally", "MIDI zoom vertically",
+      "MIDI zoom horizontally",   "Mixer scroll",
+  };
+  for (int s = 0; s < kSurfaceCount; ++s)
+  {
+    const int slot = kFirstSurfaceKnob + s;
+    g_knobs[slot].id = SurfaceKnobIdOf(s);
+    g_knobs[slot].value = &g_surfaceSpeed[s];
+    g_knobs[slot].min = kSurfaceSpeedMin;
+    g_knobs[slot].max = kSurfaceSpeedMax;
+    g_knobs[slot].name = kSurfNames[s];
+    g_knobPos[slot] = ValueToKnob(slot);
   }
 }
 
@@ -6504,9 +6786,9 @@ extern "C" __declspec(dllexport) int ReaperPluginEntry(HINSTANCE hInst, reaper_p
   // has to make it obvious which one REAPER is running -- both in the Extensions list and in a
   // user's screenshot, which is often all we get.
 #ifdef SWS_WHEEL_LOG
-  rec->Register("ext_name", (void *)"Smooth Wheel Scroll 1.7.6 DEV (wheel log)");
+  rec->Register("ext_name", (void *)"Smooth Wheel Scroll 1.7.7 DEV (wheel log)");
 #else
-  rec->Register("ext_name", (void *)"Smooth Wheel Scroll 1.7.6");
+  rec->Register("ext_name", (void *)"Smooth Wheel Scroll 1.7.7");
 #endif
   rec->Register("ext_vendor", (void *)"SmoothWheelScroll");
 

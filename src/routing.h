@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <cstring>
+#include <cmath>
 
 // ---------------------------------------------------------------------------
 // ROUTING -- "where does an animated amount go, and how is it handed over?"
@@ -48,6 +49,138 @@ enum class Kind
   // default, and exactly what this plugin has always done for such an action.
   kUnknown
 };
+
+// ---------------------------------------------------------------------------
+// PER-SURFACE SPEED: eight knobs, one per (view, direction, kind), multiplying the travel before it
+// enters the model (forum request: "even at quickest settings the vertical scroll still feels very
+// sluggish").
+//
+// WHICH EIGHT, and why exactly these:
+//
+//   1. Main view  PAN  vertical    (scroll: 989/978)
+//   2. Main view  PAN  horizontal  (scroll: 988/977)
+//   3. Main view  ZOOM vertical    (1000/1001)
+//   4. Main view  ZOOM horizontal  (990/979)
+//   5. MIDI editor PAN  horizontal  (40433/40660)
+//   6. MIDI editor ZOOM vertical    (40430/40663)
+//   7. MIDI editor ZOOM horizontal  (40431/40662)
+//   8. Mixer PAN                    (DRIVE_MCP_WHEEL -- the TCP/MCP surfaces)
+//
+// WHY SEPARATE BY VIEW: PAN and ZOOM are different receivers (one moves the view, the other changes a
+// multiplier), and the main view and the MIDI editor are used at different scales -- one number
+// cannot serve both.
+//
+// WHY SEPARATE BY DIRECTION: the AXIS is what a receiver quantizes, and the two axes of one view are
+// different receivers. A vertical pan steps whole track rows and a horizontal one steps pixels (see
+// FilterFor), so a notch of each moves a different distance and feels differently sluggish.
+//
+// ★ WHY MIDI VERTICAL PAN HAS NO KNOB (40432/40661). This is a measured conclusion, not an oversight.
+// The axis delivers in whole 7-bit units (Delivery::kStepUnits), so a bigger factor does not produce
+// more sends -- it produces the SAME number of sends, each one BIGGER. Measured with the knob at
+// 3.00x: amount rose from about 8 units per notch to 26, and the log shows single sends of val=-7 to
+// -14 (7 to 14 whole units at once), i.e. half a pitch row per call. REAPER's MIDI scroll is
+// quantized to a whole pitch row (AGENTS 17), so it does move further -- but it moves in fewer,
+// coarser strides rather than faster, which reads as "the knob does nothing". A knob that cannot do
+// what its label promises is worse than no knob, so the axis is left alone at its 1.0x behaviour.
+// The correct fix would be a finer delivery on that axis, which AGENTS 17 already measured as causing
+// stutter; do not retry it casually.
+//
+// WHERE THE FACTOR IS APPLIED: to the TRAVEL, before the window model, NOT to the delivered
+// values. That matters -- it means
+//   * the glide shape is unchanged (a factor scales the motion, it does not re-time it),
+//   * everything downstream keeps working: the row-height gain, both delivery grids, the
+//     end-of-gesture top-up, macros,
+//   * a factor of exactly 1.0 leaves every number bit-for-bit as it was, so the defaults are
+//     the behaviour this plugin has always shipped.
+enum class Surface
+{
+  kMainPanV = 0,
+  kMainPanH,
+  kMainZoomV,
+  kMainZoomH,
+  kMidiPanH, // NOT kMidiPanV: see the note above on why MIDI vertical pan has no knob
+  kMidiZoomV,
+  kMidiZoomH,
+  kMixerPan,
+  kCount
+};
+
+// The knob range, and the fact that 1.0x sits at the MIDDLE of the dial.
+//
+// The two are in tension: 0.5..3.0 does not have 1.0 in the middle linearly (that would be 1.75), and
+// the user wants both -- the full 0.5..3.0 range AND the default at twelve o'clock, so the dial reads
+// as "centred = no change". The solution is a PIECEWISE LOGARITHMIC dial position: the left half of
+// the travel runs 0.5x -> 1.0x and the right half runs 1.0x -> 3.0x. Each half is logarithmic, so
+// equal movements of the knob are equal RATIOS, and the two halves are independent (the left spans a
+// factor of 2, the right a factor of 3) -- which is exactly what the values asked for imply.
+//
+// The value itself stays a plain multiplicative factor: only the MAPPING between knob position and
+// value is nonlinear. Everything downstream sees the same 0.5..3.0 number it always would.
+//
+// Clamped, never rejected: a stored value outside the range is pulled to the nearest end (the panel
+// and the loader both go through ClampSurfaceSpeed).
+static const double kSurfaceSpeedMin = 0.5;
+static const double kSurfaceSpeedMax = 3.0;
+static const double kSurfaceSpeedDefault = 1.0;
+static const int kSurfaceCount = (int)Surface::kCount;
+
+inline double ClampSurfaceSpeed(double v)
+{
+  if (!(v == v)) // NaN
+    return kSurfaceSpeedDefault;
+  if (v < kSurfaceSpeedMin)
+    return kSurfaceSpeedMin;
+  if (v > kSurfaceSpeedMax)
+    return kSurfaceSpeedMax;
+  return v;
+}
+
+// ★ POSITION <-> VALUE for the surface dials, with kSurfaceSpeedDefault at exactly 500 -- twelve
+// o'clock, the pointer straight up.
+//
+// THE DIAL IS PIECEWISE LOGARITHMIC. The left half of the travel runs 0.5x -> 1.0x and the right half
+// runs 1.0x -> 3.0x, each half logarithmic so equal knob movements are equal RATIOS. That is what
+// makes both things the user asked for true at once: the range is the full 0.5..3.0, and the default
+// sits in the middle. A linear dial cannot do both -- with 0.5..3.0 linear, 1.0 is at 20% of the
+// travel, not the middle.
+//
+// The VALUE stays a plain factor; only this mapping is nonlinear.
+inline int SurfaceKnobPosFromValue(double v)
+{
+  v = ClampSurfaceSpeed(v);
+  double p;
+  if (v >= kSurfaceSpeedDefault)
+  {
+    const double span = kSurfaceSpeedMax / kSurfaceSpeedDefault; // 3.0 over 500..1000
+    p = 500.0 + 500.0 * (log(v / kSurfaceSpeedDefault) / log(span));
+  }
+  else
+  {
+    const double span = kSurfaceSpeedDefault / kSurfaceSpeedMin; // 2.0 over 0..500
+    p = 500.0 - 500.0 * (log(kSurfaceSpeedDefault / v) / log(span));
+  }
+  if (p < 0.0) p = 0.0;
+  if (p > 1000.0) p = 1000.0;
+  return (int)(p + 0.5);
+}
+
+inline double SurfaceValueFromKnobPos(int pos)
+{
+  if (pos < 0) pos = 0;
+  if (pos > 1000) pos = 1000;
+  double v;
+  if (pos >= 500)
+  {
+    const double span = kSurfaceSpeedMax / kSurfaceSpeedDefault; // 3.0
+    v = kSurfaceSpeedDefault * exp(log(span) * ((pos - 500) / 500.0));
+  }
+  else
+  {
+    const double span = kSurfaceSpeedDefault / kSurfaceSpeedMin; // 2.0
+    v = kSurfaceSpeedDefault / exp(log(span) * ((500 - pos) / 500.0));
+  }
+  return ClampSurfaceSpeed(v);
+}
 
 // HOW the travel is handed to the receiver.
 enum class Delivery
@@ -107,6 +240,56 @@ struct ActionSpec
   // carries the "mousewheel" marker. That holds for every row below.
   bool relativeAction = false;
 };
+
+// Which surface a resolved action belongs to. Stated as a rule over (drive, section, axis, kind),
+// not as a list of ids, so a name-matched action lands in the same bucket as the table's own row.
+inline Surface SurfaceFor(const ActionSpec &s)
+{
+  if (s.drive == DRIVE_MCP_WHEEL)
+    return Surface::kMixerPan; // the mixer has no direction: REAPER owns that context
+  const bool h = (s.axis == Axis::kHorizontal);
+  const bool zoom = (s.kind == Kind::kZoom);
+  if (s.section == kSectionMidi)
+  {
+    if (zoom)
+      return h ? Surface::kMidiZoomH : Surface::kMidiZoomV;
+    // MIDI VERTICAL PAN has no knob (see the note on Surface). It is mapped to the mixer bucket only
+    // because the enum has no "none" member; SurfaceSpeedFor() below is what actually keeps it at
+    // 1.0x, and the mixer bucket is unreachable from the MIDI editor, so no knob can move it.
+    return h ? Surface::kMidiPanH : Surface::kMixerPan;
+  }
+  // Main (and main-alt, which shares the main table). An action whose NAME says neither Scroll nor
+  // Zoom goes with PAN: pan is the motion that has always worked, so an unknown receiver is treated
+  // as one rather than given a multiplier it may not share. Its AXIS is still known, so it still
+  // splits horizontal from vertical.
+  if (zoom)
+    return h ? Surface::kMainZoomH : Surface::kMainZoomV;
+  return h ? Surface::kMainPanH : Surface::kMainPanV;
+}
+
+// ★ THE ONE PLACE that answers "how much does this action get scaled". It exists because one axis
+// must be pinned at 1.0x: MIDI vertical PAN (40432/40661), whose receiver quantizes to a whole pitch
+// row, so a bigger factor only makes each send COARSER rather than making the view move faster (the
+// measurement is in the note on Surface above).
+//
+// Pinning it HERE rather than by leaving it out of the knob table is deliberate: the table says what
+// the user can turn, this says what the delivery actually does, and the two must not be able to drift
+// apart. `speed` is the value the caller holds in its array; passing it in keeps this header free of
+// the plugin's globals.
+inline bool SurfaceIsAdjustable(const ActionSpec &s)
+{
+  return !(s.section == kSectionMidi && s.axis == Axis::kVertical && s.kind == Kind::kScroll);
+}
+
+inline double SurfaceSpeedFor(const ActionSpec &s, const double *speeds)
+{
+  if (!SurfaceIsAdjustable(s) || !speeds)
+    return kSurfaceSpeedDefault;
+  const int i = (int)SurfaceFor(s);
+  if (i < 0 || i >= (int)Surface::kCount)
+    return kSurfaceSpeedDefault;
+  return ClampSurfaceSpeed(speeds[i]);
+}
 
 // The known-id rows. axis + kind + relativeAction are stated; the delivery is NOT (FilterFor
 // derives it). Every row here is a "(MIDI CC relative/mousewheel)" action -- see the note above on

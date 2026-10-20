@@ -114,6 +114,26 @@ zoom — so the more you zoom out, the less one notch travels. The plugin compen
 row height, so scrolling a **shrunken arrange view** covers a distance comparable to a zoomed-in one
 (up to 7.2x). **Above a certain zoom nothing is compensated** and that end keeps its native feel.
 
+#### Speed knobs, one per surface
+
+The eight knobs at the bottom of the panel each own **one view's one direction**: scrolling and
+zooming, in the main view and the MIDI editor, vertical and horizontal apart, plus the mixer scroll.
+
+| Knob | What it drives |
+|---|---|
+| `Main scroll vertically / horizontally` | Main view up-down / left-right scroll |
+| `Main zoom vertically / horizontally` | Main view vertical / horizontal zoom |
+| `MIDI scroll horizontally` | MIDI editor left-right scroll |
+| `MIDI zoom vertically / horizontally` | MIDI editor vertical / horizontal zoom |
+| `Scroll MCP` | Mixer scroll |
+
+**Range 0.5x – 3x, default 1x** (pointer straight up). Changes are saved immediately, and a
+**double click** restores 1x. The factor scales the *travel*, so the glide keeps its shape — only the
+distance changes — and at 1x the behaviour is identical to having no knobs at all.
+
+**The MIDI editor's vertical scroll has no knob**: that axis snaps to whole pitch rows, so a bigger
+factor only makes each jump longer, not smoother.
+
 <p align="center">
   <img src="test/settings-dark.png" alt="Settings panel (dark)" width="330">
   &nbsp;&nbsp;

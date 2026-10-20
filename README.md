@@ -104,6 +104,24 @@ Windows x64，REAPER 7。
 插件会按当前行高补上这段差距，使**轨道缩小时的滚动距离与放大时相当**（上限 7.2 倍）。
 **放大到一定程度后不再补偿**，那一端保持原生手感。
 
+#### 各视图的速度旋钮
+
+面板底部的八个旋钮，**每个管一个视图的一个方向**：主视图与 MIDI 编辑器的滚动、缩放，
+垂直与水平分开，另加调音台滚动。
+
+| 旋钮 | 管什么 |
+|---|---|
+| `Main scroll vertically / horizontally` | 主视图上下 / 左右滚动 |
+| `Main zoom vertically / horizontally` | 主视图纵向 / 横向缩放 |
+| `MIDI scroll horizontally` | MIDI 编辑器左右滚动 |
+| `MIDI zoom vertically / horizontally` | MIDI 编辑器纵向 / 横向缩放 |
+| `Scroll MCP` | 调音台滚动 |
+
+**范围 0.5x ~ 3x，默认 1x**（指针在正上方）。改变后立即保存，**双击复位**回 1x。
+系数作用在**行程**上，所以缓动形状不变，只是走得远近不同；1x 与未设旋钮时完全一样。
+
+**MIDI 编辑器的上下滚动没有旋钮**：那条轴按音高行取整，放大系数只会让每次跳得更远、不会更流畅。
+
 <p align="center">
   <img src="test/settings-dark.png" alt="设置面板（深色）" width="330">
   &nbsp;&nbsp;

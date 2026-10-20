@@ -923,7 +923,7 @@ public:
     feedClock_ = clock_;
     lastDir_ = dir;
     identity_ = identity;
-    (void)unitTravel;
+    // `unitTravel` is no longer discarded: it scales the claim below (see the note there).
     (void)P;
 
     // HOW MUCH OF THE PREVIOUS BUILD-UP IS STILL THERE, decided by the TIME since the last
@@ -963,6 +963,26 @@ public:
     rollN_ += 1.0;
     const double grow = (rollN_ - 1.0) * (P.accelPct / 7.0) * 0.5;
     double claim = P.claimBase * (P.startPct / 15.0) * (1.0 + (grow > 0.0 ? grow : 0.0));
+
+    // ★ THE CALLER'S TRAVEL NOW SCALES THE CLAIM (2026-10-20).
+    //
+    // `unitTravel` used to be discarded outright (`(void)unitTravel;` below), so this model's
+    // distance was fixed by claimBase alone and NOTHING the caller passed could change it -- which
+    // meant the per-surface speed knob had no effect on the main view's vertical zoom, the one axis
+    // this model drives.
+    //
+    // It is applied as a RATIO against the calibrated one-notch travel (kNotchUnits = 15), so a
+    // caller that passes 15 gets exactly the old behaviour, bit for bit: claim *= 1.0. That is what
+    // keeps the 1.6.1 tuning intact and makes this a scaling hook rather than a retune.
+    //
+    // Anchored to a CONSTANT rather than to a Params field on purpose: the calibration belongs to the
+    // model, and a value that could be changed from outside would silently redefine "one notch".
+    {
+      const double kCalibratedNotch = 15.0;
+      if (unitTravel > 0.0)
+        claim *= (unitTravel / kCalibratedNotch);
+    }
+
     if (claim < 0.0) claim = 0.0;
     target_ += claim;
     if (target_ > 0.995) target_ = 0.995;
