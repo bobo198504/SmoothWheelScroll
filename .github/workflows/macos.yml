@@ -29,8 +29,11 @@ permissions:
 
 jobs:
   build:
-    # arm64 is the interesting one (Apple Silicon); the runner is arm64-capable macOS hardware.
-    runs-on: macos-14
+    # macos-latest rather than a pinned macos-14: the pinned name resolved to a runner label this
+    # account cannot use ("macos-14-arm64-us-default is not supported"), and the build needs no
+    # particular macOS version -- -mmacosx-version-min=10.13 is set in build.sh, so whatever SDK the
+    # runner carries still produces binaries that run on 10.13 and later.
+    runs-on: macos-latest
     timeout-minutes: 20
 
     steps:
