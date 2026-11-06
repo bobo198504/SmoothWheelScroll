@@ -131,11 +131,18 @@ SOURCES=(
 # reaper_plugin.h pulls in "../WDL/swell/swell.h" and that WDL now ships beside sdk/ in third_party.
 INCS=(-I"$SDK" -I"$ROOT/third_party/reaper-sdk-git" -I"$ROOT/src")
 
+# ONE FILE PER ARCHITECTURE, not a universal binary.
+#
+# A universal (lipo-joined) dylib would also work -- REAPER loads either -- but 1.8 ships FOUR
+# artifacts, one per platform and architecture, so that a tester downloads the file that matches
+# their machine and a crash report names it unambiguously. Joining them would collapse that back
+# into two files and make "which build reported this?" unanswerable.
+#
 # -mmacosx-version-min=10.13: the oldest whose SDK still has every API used here (the event tap and
-# dispatch are far older). Both architectures are produced and joined, so one download runs natively
-# on Apple Silicon and on Intel.
+# dispatch are far older).
 build_arch() {
   local arch="$1"
+  local out="$OUT/reaper_smoothwheelscroll-mac-$arch.dylib"
   echo "== compiling ($arch) =="
   clang++ -std=c++17 -O2 -dynamiclib -fno-rtti \
     -arch "$arch" -mmacosx-version-min=10.13 \
@@ -145,22 +152,18 @@ build_arch() {
     "${INCS[@]}" \
     "${SOURCES[@]}" \
     -framework ApplicationServices -framework CoreFoundation \
-    -o "$DYLIB.$arch"
+    -o "$out"
+
+  echo "== built: $out =="
+  ls -l "$out"
+  echo "== architecture =="
+  lipo -info "$out"
+  echo "== exported entry point =="
+  nm -gU "$out" | grep -i _ReaperPluginEntry || { echo "MISSING EXPORT"; exit 1; }
 }
 
 build_arch arm64
 build_arch x86_64
-
-echo "== joining =="
-lipo -create "$DYLIB.arm64" "$DYLIB.x86_64" -output "$DYLIB"
-rm -f "$DYLIB.arm64" "$DYLIB.x86_64"
-
-echo "== built =="
-ls -l "$DYLIB"
-echo "== architectures =="
-lipo -info "$DYLIB"
-echo "== exported entry point =="
-nm -gU "$DYLIB" | grep -i _ReaperPluginEntry || { echo "MISSING EXPORT"; exit 1; }
 
 echo ""
 echo "== install =="
