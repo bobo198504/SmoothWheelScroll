@@ -138,6 +138,22 @@ INCS=(-I"$SDK" -I"$ROOT/third_party/reaper-sdk-git" -I"$ROOT/src")
 # their machine and a crash report names it unambiguously. Joining them would collapse that back
 # into two files and make "which build reported this?" unanswerable.
 #
+# ★ SWELL_PROVIDED_BY_APP IS REQUIRED, and its absence was the first thing the CI build caught.
+#
+# On Windows every Win32 call is a real import from user32/gdi32. On macOS THERE IS NOTHING TO
+# LINK AGAINST: REAPER itself is the implementation of SWELL and hands the function pointers to the
+# plugin at load time. swell-functions.h switches on exactly this:
+#
+#     #if defined(SWELL_PROVIDED_BY_APP) || defined(SWELL_LOAD_SWELL_DYLIB)
+#       #define SWELL_API_DEFINE(ret,func,parms) extern "C" ret (*func)parms;   // pointer
+#     #else
+#       #define SWELL_API_DEFINE(ret,func,parms) ret func parms ;                // needs a symbol
+#     #endif
+#
+# Without it, SendMessage / GetClientRect / GetWindowLong / GetTextMetrics / SWELL_DrawText are
+# declared as ordinary functions and the link fails with "undefined symbol". That is not a bug in
+# the plugin: it is the definition that tells SWELL who owns those functions.
+#
 # -mmacosx-version-min=10.13: the oldest whose SDK still has every API used here (the event tap and
 # dispatch are far older).
 build_arch() {
@@ -147,11 +163,11 @@ build_arch() {
   clang++ -std=c++17 -O2 -dynamiclib -fno-rtti \
     -arch "$arch" -mmacosx-version-min=10.13 \
     -isysroot "$MACSDK" \
-    -DNOMINMAX -DUNICODE -D_UNICODE \
+    -DNOMINMAX -DUNICODE -D_UNICODE -DSWELL_PROVIDED_BY_APP \
+    -framework CoreFoundation -framework ApplicationServices \
     "${DEFS[@]}" \
     "${INCS[@]}" \
     "${SOURCES[@]}" \
-    -framework ApplicationServices -framework CoreFoundation \
     -o "$out"
 
   echo "== built: $out =="
