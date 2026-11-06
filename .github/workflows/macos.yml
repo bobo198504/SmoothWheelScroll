@@ -1,0 +1,86 @@
+name: macOS build
+
+# Builds the two macOS .dylib files on GitHub's own macOS runners.
+#
+# WHY THIS EXISTS: the release machine is Windows and has no macOS SDK, so the macOS half of a
+# release cannot be produced there. GitHub provides macOS runners for free, which turns "somebody
+# please build this" into a two-minute automatic job and puts the artifacts next to the Windows
+# DLLs where users expect them.
+#
+# The two architectures are built as SEPARATE files (not one universal binary), matching the four
+# artifacts 1.8 ships: one per platform and architecture.
+#
+# The job is allowed to fail loudly. This code has never run on a Mac, so a red build IS the
+# diagnostic result -- the compiler output is the useful thing, not the green check.
+
+on:
+  workflow_dispatch: # run it by hand from the Actions tab
+  push:
+    tags:
+      - 'v*' # and automatically for every version tag
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'build.sh'
+      - '.github/workflows/macos.yml'
+
+permissions:
+  contents: write # needed to attach the artifacts to a release
+
+jobs:
+  build:
+    # arm64 is the interesting one (Apple Silicon); the runner is arm64-capable macOS hardware.
+    runs-on: macos-14
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: |
+          sw_vers
+          uname -m
+          xcrun --show-sdk-path
+          xcrun --sdk macosx --show-sdk-version
+          clang++ --version
+
+      - name: Build both architectures
+        run: |
+          # bash explicitly: the executable bit on build.sh is not set in the repo (it is 100644),
+          # and chmod-ing it here would be a workaround for a problem the build does not have.
+          bash build.sh --mac
+
+      - name: Show what was produced
+        run: |
+          ls -la build/
+          file build/*.dylib
+          for f in build/*.dylib; do
+            echo "--- $f"
+            lipo -info "$f"
+            # The entry point MUST be exported or REAPER will not load the plugin at all.
+            nm -gU "$f" | grep -i _ReaperPluginEntry || {
+              echo "MISSING EXPORT in $f"; exit 1;
+            }
+          done
+
+      - name: Upload as a workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-dylibs
+          path: build/*.dylib
+          if-no-files-found: error
+
+      # Only on a tag, and only if the build actually produced both files: attaching a broken or
+      # partial set to a published release is worse than attaching nothing.
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          count=$(ls build/*.dylib 2>/dev/null | wc -l | tr -d ' ')
+          if [ "$count" -ne 2 ]; then
+            echo "expected 2 dylibs, found $count -- not touching the release"
+            exit 1
+          fi
+          gh release upload "$tag" build/*.dylib --clobber --repo "$GITHUB_REPOSITORY"
