@@ -125,6 +125,18 @@ SOURCES=(
   "$ROOT/src/platform/mac/wheel_mac.mm"
   "$ROOT/src/platform/mac/panel_mac.mm"
   "$ROOT/src/platform/mac/win32_compat.mm"
+  # ★ SWELL'S MODULE STUB -- not optional, and the second thing the CI build taught us.
+  #
+  # Defining SWELL_PROVIDED_BY_APP makes swell-functions.h declare every SWELL call as a function
+  # POINTER. Something still has to DEFINE those pointers and fill them in at load time, and this
+  # file is that something: it emits the pointer definitions, then at static-init asks REAPER's app
+  # delegate for `swellGetAPPAPIFunc` and assigns each one by name, substituting a harmless dummy for
+  # anything the host does not offer.
+  #
+  # Without it the pointers are declared-and-never-defined, which is a link error naming exactly the
+  # five calls this build actually makes (and it would be the same error for all of them, so the
+  # count is not a hint that only five are needed).
+  "$ROOT/third_party/reaper-sdk-git/WDL/swell/swell-modstub.mm"
 )
 
 # TWO include roots are needed: the SDK's sdk/ dir (reaper_plugin.h) and the SDK ROOT, because
@@ -164,7 +176,7 @@ build_arch() {
     -arch "$arch" -mmacosx-version-min=10.13 \
     -isysroot "$MACSDK" \
     -DNOMINMAX -DUNICODE -D_UNICODE -DSWELL_PROVIDED_BY_APP \
-    -framework CoreFoundation -framework ApplicationServices \
+    -framework CoreFoundation -framework ApplicationServices -framework Cocoa \
     "${DEFS[@]}" \
     "${INCS[@]}" \
     "${SOURCES[@]}" \
