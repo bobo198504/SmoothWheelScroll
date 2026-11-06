@@ -31,15 +31,47 @@
 // The motion itself (the animation) lives behind model.h and is pure math,
 // independent of REAPER; test/anim_sim.cpp exercises it standalone.
 
+#ifdef _WIN32
 #include <windows.h>
 #include <windowsx.h> // GET_X_LPARAM / GET_Y_LPARAM for the right-click menu
+#include <mmsystem.h>
+#else
+// macOS: SWELL is Cockos' Win32 emulation layer and ships with the REAPER SDK. It is what
+// reaper_plugin.h itself pulls in on non-Windows builds, and it supplies HWND, WM_*, SetTimer,
+// GetDlgItem, SetWindowPos, InvalidateRect and the rest -- which is why the panel and the delivery
+// code below can be compiled for macOS at all rather than rewritten.
+//
+// WHAT IT DOES NOT SUPPLY, and therefore what the Mac build must handle elsewhere: the low-level
+// wheel hook (SetWindowsHookEx / CallNextHookEx) and the multimedia timer (timeSetEvent). See
+// platform/mac/wheel_mac.mm for the CGEventTap replacement.
+#include "../third_party/reaper-sdk-git/WDL/swell/swell.h"
+// The handful of Win32 names SWELL does not define (SIZE, SYSTEMTIME, LARGE_INTEGER, ...). Each one
+// is documented there with what the Win32 original is and why the definition is faithful -- and
+// anything whose semantics SWELL cannot reproduce is deliberately NOT in it.
+#include "platform/mac/win32_compat.h"
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
 #include <math.h>
 #include <string.h>
 #include <ctype.h>
-#include <mmsystem.h>
+
+// ---------------------------------------------------------------------------
+// THE PLATFORM BOUNDARY (macOS port, in progress).
+//
+// platform.h names the operating-system-facing pieces -- the wheel hook, the frame clock, hit
+// testing, the optional panel -- behind opaque types, so the Mac build disagrees with ONE header
+// instead of with 6800 lines. On Windows the opaque types ARE the Win32 handles (see the #ifdef in
+// platform.h), which is what lets this file keep spelling HWND everywhere while the boundary is
+// introduced in steps rather than in one unreviewable rename.
+//
+// ORDERING MATTERS: this must come AFTER <windows.h>, because platform.h's Windows branch names
+// HWND__ and HINSTANCE__ to alias them. Included before it, those are incomplete structs and every
+// PlatWindow would be a distinct type from HWND -- which would still compile and then fail at the
+// first handoff between the two spellings.
+// ---------------------------------------------------------------------------
+#include "platform.h"
 
 // ---------------------------------------------------------------------------
 // REAPER API surface (minimal set)
@@ -48,6 +80,9 @@
 #define REAPERAPI_MINIMAL
 #define REAPERAPI_WANT_plugin_register
 #define REAPERAPI_WANT_GetMainHwnd
+// For the startup diagnostic: the log's first lines record which REAPER produced them, which is the
+// first thing anyone reading a bug report needs.
+#define REAPERAPI_WANT_GetAppVersion
 #define REAPERAPI_WANT_kbd_getTextFromCmd
 #define REAPERAPI_WANT_SectionFromUniqueID
 #define REAPERAPI_WANT_KBD_OnMainActionEx
@@ -449,7 +484,24 @@ static const DWORD kWheelFlagMs = 250;   // wheel->action latch validity window
 // per-wheel verbose logging (it is heavy and would fill %TEMP% for no reason); the two switches are
 // independent and can be combined if someone wants both.
 // ---------------------------------------------------------------------------
-#ifdef SWS_DEBUG_LOG
+// ★ ON macOS THE DEBUG LOG IS ON BY DEFAULT, AND THAT IS DELIBERATE.
+//
+// A Windows user who reports "it stutters" can be asked to install a --debug-log build. A macOS
+// tester in this port cannot: the build they are given is the only one that exists, nobody can
+// rebuild it, and the questions that matter ("did the event tap install? did the permission get
+// granted? did a wheel arrive at all? did the action path fire?") are exactly the ones only a log
+// can answer.
+//
+// So the Mac build always logs, and that file is the ONLY diagnostic channel this port has.
+// SWS_DEBUG_LOG still forces it on for Windows (the --debug-log build); on Windows it stays off by
+// default as before, so no Windows release behaviour changes.
+//
+// WHERE THE FILE LANDS on macOS: $TMPDIR/SmoothWheelScroll.log, i.e.
+// /var/folders/.../T/SmoothWheelScroll.log. The log prints its own full path at startup so a tester
+// never has to guess. On a Mac the quickest way to read it:
+//     open -e "$TMPDIR/SmoothWheelScroll.log"
+// ---------------------------------------------------------------------------
+#if defined(SWS_DEBUG_LOG) || !defined(_WIN32)
 static const bool kDebugLog = true;
 #else
 static const bool kDebugLog = false;
@@ -478,20 +530,37 @@ static void PanelWheelAssignment(const char *context, bool shift, bool ctrl, boo
   GetMouseModifier(context, flag, out, outSize);
 }
 
+// Where the log lives, resolved the same way Log() resolves it. Kept in one function so the path
+// printed at startup and the path actually written can never disagree.
+static bool LogFilePath(char *out, int outSize)
+{
+  if (!out || outSize < 32)
+    return false;
+  DWORD n = GetTempPathA((DWORD)outSize, out);
+  if (n == 0 || (int)n + 32 >= outSize)
+    return false;
+  strcat(out, "SmoothWheelScroll.log");
+  return true;
+}
+
 static void Log(const char *fmt, ...)
 {
   if (!kDebugLog)
     return;
   char path[MAX_PATH];
-  DWORD n = GetTempPathA(MAX_PATH, path);
-  if (n == 0 || n + 32 >= MAX_PATH)
+  if (!LogFilePath(path, (int)sizeof(path)))
     return;
-  strcat(path, "SmoothWheelScroll.log");
   FILE *f = fopen(path, "a");
   if (!f)
     return;
   SYSTEMTIME st;
+#ifdef _WIN32
   GetLocalTime(&st);
+#else
+  // No GetLocalTime on macOS; SwsLocalTime (platform/mac/win32_compat.h) fills the SAME struct from
+  // localtime(), so the format string below does not change between platforms.
+  SwsLocalTime(&st);
+#endif
   fprintf(f, "%02d:%02d:%02d.%03d ", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
   va_list ap;
   va_start(ap, fmt);
@@ -543,6 +612,11 @@ static HANDLE g_mmTimer = nullptr;    // timeSetEvent handle
 static UINT g_mmTimerMs = kFastTimerMs; // period requested for the multimedia timer
 static volatile LONG g_tickPosted = 0; // coalesce: one posted tick at a time
 static HHOOK g_msgHook = nullptr;
+// Whether the wheel hook is actually up. On Windows that is "the WH_GETMESSAGE hook was accepted";
+// on macOS "the CGEventTap was created", which needs the Accessibility permission. Recorded at
+// install time rather than inferred later, because on macOS there is no handle to test -- and a
+// startup diagnostic that guessed would be worse than none.
+static bool g_hookInstalled = false;
 static DWORD g_uiThreadId = 0;
 static bool g_shuttingDown = false;
 static volatile LONG g_wheelTick = 0;   // GetTickCount() of last arrange wheel; 0=none
@@ -2114,6 +2188,13 @@ static void Kick(Integrator &g, const Route &route, double wheelSign, double uni
 
 static void StopTimer()
 {
+#ifndef _WIN32
+  // macOS: the platform owns the clock (see StartTimer above).
+  plat::TimerStop();
+  g_timerOn = false;
+  InterlockedExchange(&g_tickPosted, 0);
+  return;
+#else
   if (g_mmTimer)
   {
     timeKillEvent((UINT)(UINT_PTR)g_mmTimer);
@@ -2126,6 +2207,7 @@ static void StopTimer()
   }
   g_timerOn = false;
   InterlockedExchange(&g_tickPosted, 0);
+#endif
 }
 
 // Hand the mixer SMALL WHEEL MESSAGES, so REAPER's own mixer code moves it.
@@ -2495,8 +2577,16 @@ static LRESULT CALLBACK AnimWndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
   return DefWindowProc(h, msg, wp, lp);
 }
 
-// Create the plugin's own message window. This is a window WE own and register,
-// never a REAPER window, so nothing about REAPER is touched.
+#ifdef _WIN32
+// ---------------------------------------------------------------------------
+// THE ANIMATION MESSAGE WINDOW -- Windows only.
+//
+// Exists for one reason: the multimedia timer runs on ITS OWN thread, and REAPER must be called from
+// the UI thread, so a tick has to be POSTED to a window the plugin owns. On macOS there is no such
+// thread -- a GCD dispatch source created on the main queue already calls back there -- so no window
+// is needed and none is created (see platform/mac/time_mac.mm).
+//
+// This is a window WE own and register, never a REAPER window, so nothing about REAPER is touched.
 static bool EnsureAnimWindow()
 {
   if (g_animWnd && IsWindow(g_animWnd))
@@ -2516,11 +2606,34 @@ static bool EnsureAnimWindow()
                               HWND_MESSAGE, nullptr, g_hInst, nullptr);
   return g_animWnd != nullptr;
 }
+#endif // _WIN32
+
+#ifndef _WIN32
+// The platform clock's callback (see plat::TimerStart). On macOS the GCD source already fires on the
+// main thread, so this is the whole hop: no PostMessage, no coalescing flag -- there is nothing to
+// coalesce, because the handler cannot run concurrently with itself on one queue.
+//
+// ON WINDOWS THIS IS UNUSED and the equivalent work is done by AnimProc / MmTimerProc /
+// AnimWndProc, which exist because the multimedia timer runs on its own thread and must post.
+static void SwsPlatTick(void *)
+{
+  Tick();
+}
+#endif
 
 static void StartTimer()
 {
   if (g_timerOn)
     return;
+#ifndef _WIN32
+  // ★ macOS: the frame clock is the platform's (a GCD dispatch source, see
+  // platform/mac/time_mac.mm). There is no multimedia timer and no message window to post to, so
+  // none of the Windows branches below apply -- the source's handler already runs on the main
+  // thread, which is where REAPER must be called from.
+  plat::TimerStart(kAnimTimerMs, &SwsPlatTick, nullptr);
+  g_timerOn = plat::TimerRunning();
+  return;
+#else
   // Baseline: the plain thread timer, exactly as before the precision work.
   if (!kFastTimer)
   {
@@ -2544,6 +2657,7 @@ static void StartTimer()
   }
   g_timer = SetTimer(nullptr, 0, kAnimTimerMs, AnimProc);
   g_timerOn = (g_timer != 0);
+#endif
 }
 
 // ---------------------------------------------------------------------------
@@ -2583,11 +2697,40 @@ static Device LastWheelDevice(bool horizontal)
   return (Device)InterlockedCompareExchange((volatile LONG *)kind, 0, 0);
 }
 
-// Was the most recent wheel a TOUCHPAD? (For the direction-reverse feature, which is the one thing
-// a touchpad does get.) That feature acts on the horizontal ZOOM, so it reads the horizontal stream.
+// Was the MOST RECENT wheel a touchpad, whichever axis it came from?
+//
+// ★ THIS USED TO READ THE HORIZONTAL STREAM ONLY (fixed 2026-11-06).
+//
+// The direction-reverse feature acts on the horizontal-ZOOM actions, and the original reasoning was
+// "a horizontal zoom must be driven by a horizontal wheel, so read the horizontal stream". That does
+// not hold: a touchpad two-finger swipe moving up/down produces ORDINARY VERTICAL wheel messages with
+// sub-notch deltas (measured in the DEV wheel log: every message on axis V, deltas 13, 30, 49, 53,
+// 97), and the host resolves that wheel into whatever action the user has bound. The device record
+// was therefore written on the VERTICAL stream while this function read the HORIZONTAL one, found
+// nothing, answered "notched", and the reverse never happened.
+//
+// The question being asked is only "what device produced the wheel I just saw", and the wheel may
+// come from either axis. So it is answered from whichever stream was written more recently. That is
+// strictly more correct than picking one axis, and it cannot regress the case the old code was
+// written for: a genuine horizontal wheel writes the horizontal stream, which is then the newer one.
+//
+// NOTE this deliberately says nothing about WHICH action the wheel drives. That is the host's
+// business -- the plugin does not know or care which modifier or binding produced the action it is
+// handed; it only reports what device the wheel came from.
 static bool LastWheelWasTouchpad()
 {
-  return LastWheelDevice(true) == Device::kTouchpad;
+  const DWORD tV = (DWORD)InterlockedCompareExchange((volatile LONG *)&g_lastDevTick, 0, 0);
+  const DWORD tH = (DWORD)InterlockedCompareExchange((volatile LONG *)&g_lastDevTickH, 0, 0);
+  // A zero timestamp means "no wheel on that stream yet" -- treated as infinitely old so the other
+  // stream wins, and so that neither being set reports notched (via LastWheelDevice's own staleness
+  // test) rather than guessing.
+  //
+  // ★ THE COMPARISON IS WRAP-SAFE. GetTickCount wraps every 49.7 days, so `tH > tV` is wrong across
+  // a wrap. Signed difference answers "is tH newer than tV" correctly for any two ticks less than
+  // 24.8 days apart, which every pair here is by construction (a record older than kWheelFlagMs is
+  // discarded anyway).
+  const bool useH = (tH != 0) && (tV == 0 || (LONG)(tH - tV) > 0);
+  return LastWheelDevice(useH) == Device::kTouchpad;
 }
 
 // Did the hook PASS THAT WHEEL THROUGH -- i.e. did it refuse to animate it? A touchpad and an
@@ -3344,6 +3487,23 @@ static void WheelLogRecord(int delta, unsigned key, long extra, const char *winc
 }
 #endif // SWS_WHEEL_LOG
 
+#ifdef _WIN32
+// ---------------------------------------------------------------------------
+// THE WHEEL HOOK PROCEDURE -- Windows only.
+//
+// On Windows the plugin sees the wheel itself, through a WH_GETMESSAGE hook installed on REAPER's UI
+// thread. That is what lets it swallow a wheel and re-drive the resolved action with animated values.
+//
+// macOS has NO equivalent, and the whole block below is therefore excluded there: SWELL has neither
+// SetWindowsHookEx nor CallNextHookEx, and the CGEventTap that replaces it is an OBSERVER (see
+// platform/mac/wheel_mac.mm) -- it records what the most recent wheel looked like, and the plugin
+// then animates whatever REAPER resolves that wheel into by hooking the action table instead. That
+// is the portable path the plugin already uses on Windows for the arrange area.
+//
+// The consequence for a Mac tester, stated plainly: the wheel is animated when REAPER routes it
+// through an action, which covers every binding in the action table; a surface the plugin reaches
+// only through the hook (the TCP panel's own wheel, the divider strips) is NOT animated on macOS.
+// ---------------------------------------------------------------------------
 static LRESULT CALLBACK GetMsgProc(int code, WPARAM wParam, LPARAM lParam)
 {
   // Our own mixer wheel is sent with SendMessage, which goes straight to the window procedure
@@ -3777,9 +3937,46 @@ static void InstallHook()
   if (!g_msgHook)
   {
     g_msgHook = SetWindowsHookEx(WH_GETMESSAGE, GetMsgProc, g_hInst, g_uiThreadId);
+    g_hookInstalled = (g_msgHook != nullptr);
     Log("msg hook -> %p (thread %lu)", (void *)g_msgHook, g_uiThreadId);
   }
 }
+
+#else // !_WIN32
+
+// ---------------------------------------------------------------------------
+// macOS: no message hook exists. The wheel is observed by a CGEventTap instead (platform/mac/
+// wheel_mac.mm), which needs no installation on a thread and is created through the platform layer.
+//
+// InstallHook keeps its name so the startup code above calls the same function on both platforms;
+// what changes is what "installing" means.
+// ---------------------------------------------------------------------------
+static void InstallHook()
+{
+  if (!g_main)
+    g_main = GetMainHwnd();
+  if (!g_main)
+    return;
+  if (g_uiThreadId)
+    return;
+  g_uiThreadId = GetCurrentThreadId();
+
+  if (!plat::WheelHookInstall())
+  {
+    // Almost always the Accessibility permission. Reported in plain words because a tester whose
+    // wheels are not animating will otherwise have nothing to go on: without the tap the plugin
+    // sees no wheel at all and simply behaves like one that was never installed.
+    g_hookInstalled = false;
+    Log("wheel hook NOT installed -- CGEventTap refused");
+    Log("  >>> grant REAPER Accessibility permission:");
+    Log("  >>>   System Settings > Privacy & Security > Accessibility, then reload the plugin");
+    return;
+  }
+  g_hookInstalled = true;
+  Log("wheel hook -> CGEventTap installed (thread %lu)", (unsigned long)g_uiThreadId);
+}
+
+#endif // _WIN32
 
 // ---------------------------------------------------------------------------
 // TUNING UI -- the author's own debug tool, NOT shipped.
@@ -6610,7 +6807,12 @@ static void RemoveAll()
 #endif
   if (g_msgHook)
   {
+#ifdef _WIN32
     UnhookWindowsHookEx(g_msgHook);
+#else
+    // macOS: the "hook" is the platform's event tap; tearing it down is the platform's job.
+    plat::WheelHookRemove();
+#endif
     g_msgHook = nullptr;
   }
   if (g_animWnd && IsWindow(g_animWnd))
@@ -6620,7 +6822,9 @@ static void RemoveAll()
   }
   if (g_timerPeriodRaised)
   {
+#ifdef _WIN32
     timeEndPeriod(1);
+#endif
     g_timerPeriodRaised = false;
   }
 }
@@ -6740,8 +6944,16 @@ static void DumpActionNames(const char *why)
 #endif
 }
 
-extern "C" __declspec(dllexport) int ReaperPluginEntry(HINSTANCE hInst, reaper_plugin_info_t *rec)
+// ---------------------------------------------------------------------------
+// THE STARTUP IMPLEMENTATION, platform-free, plus the name each platform exports it under.
+//
+// One body, two entry names. Windows exports `ReaperPluginEntry` directly from here (it is the only
+// translation unit that calls itself, so there is no recursion hazard); macOS exports a thin wrapper
+// from platform/mac/entry_mac.mm that wakes the platform layer and then calls `SwsSharedEntry`. See
+// the long note in that file for why the Mac wrapper must NOT be called ReaperPluginEntry.
+static int SwsEntryImpl(void *hInstVoid, reaper_plugin_info_t *rec)
 {
+  HINSTANCE hInst = (HINSTANCE)hInstVoid;
   if (!rec)
   {
     RemoveAll();
@@ -6785,10 +6997,18 @@ extern "C" __declspec(dllexport) int ReaperPluginEntry(HINSTANCE hInst, reaper_p
   // were somehow loaded they would each install a hook and animate every wheel twice, so the name
   // has to make it obvious which one REAPER is running -- both in the Extensions list and in a
   // user's screenshot, which is often all we get.
+//
+// ★ THE VERSION SUFFIX SAYS WHICH BUILD THIS IS, and on macOS it must, because there the release is
+// a TEST BUILD: nobody has run it on a Mac, and a tester needs to see that in REAPER's own list
+// rather than only in a forum post. The suffix is what distinguishes the four artifacts shipped for
+// 1.8 -- win-x64 (verified), win-arm64 (compiled, never run), and the two macOS dev builds (neither
+// compiled nor run here).
 #ifdef SWS_WHEEL_LOG
-  rec->Register("ext_name", (void *)"Smooth Wheel Scroll 1.7.7 DEV (wheel log)");
+  rec->Register("ext_name", (void *)"Smooth Wheel Scroll 1.8 DEV (wheel log)");
+#elif defined(_WIN32)
+  rec->Register("ext_name", (void *)"Smooth Wheel Scroll 1.8");
 #else
-  rec->Register("ext_name", (void *)"Smooth Wheel Scroll 1.7.7");
+  rec->Register("ext_name", (void *)"Smooth Wheel Scroll 1.8 DEV (macOS test build)");
 #endif
   rec->Register("ext_vendor", (void *)"SmoothWheelScroll");
 
@@ -6810,8 +7030,17 @@ extern "C" __declspec(dllexport) int ReaperPluginEntry(HINSTANCE hInst, reaper_p
   // Windows' default timer granularity is ~15.6 ms, coarser than g_releaseMs, so
   // the release would land as a single late step and wheel-to-wheel timing would
   // be lumpy. Ask for 1 ms resolution while the plugin is active.
+  //
+  // macOS HAS NO SUCH REQUEST: a GCD timer's resolution is not a global setting, and the Mac build
+  // targets the MEASURED Windows cadence anyway (kCoalesceMs in platform/mac/time_mac.mm), so there
+  // is nothing to raise here.
+#ifdef _WIN32
   if (timeBeginPeriod(1) == TIMERR_NOERROR)
     g_timerPeriodRaised = true;
+#endif
+  // (macOS: plat::TimeInit() has already been called by the entry point in platform/mac/
+  // entry_mac.mm, before this function runs -- see the note there. Calling it again is harmless but
+  // redundant, so it is not repeated here.)
 
   InstallHook();
 
@@ -6840,14 +7069,187 @@ extern "C" __declspec(dllexport) int ReaperPluginEntry(HINSTANCE hInst, reaper_p
   DumpMouseModifiers("load");
   DumpActionNames("load"); // which actions exist and what they are called (debug build only)
 
+  // ---------------------------------------------------------------------------
+  // ★ STARTUP DIAGNOSTICS -- the first lines of the log, and for the macOS test build the most
+  // important ones in it.
+  //
+  // A tester is asked to send this file back. Whoever reads it needs four facts before anything else
+  // makes sense, and all four are things that are otherwise invisible:
+  //
+  //   1. WHERE the log is          -- so the tester can find it in the first place;
+  //   2. WHICH build and platform  -- a report is useless without knowing what produced it;
+  //   3. whether the WHEEL HOOK is installed -- on macOS this is the Accessibility permission, and
+  //      without it the plugin sees no wheel at all and looks completely dead;
+  //   4. whether the GLIDE is ON   -- the master switch, and the single most common reason "nothing
+  //      happened" that has nothing to do with the port.
+  //
+  // Printed unconditionally (not behind SWS_DEBUG_LOG) because kDebugLog already decides whether the
+  // file is written at all -- a log that exists but omits these would be worse than no log.
+  // ---------------------------------------------------------------------------
+  {
+    char logPath[MAX_PATH] = {0};
+    if (LogFilePath(logPath, (int)sizeof(logPath)))
+      Log("=== log file: %s", logPath);
+#ifdef _WIN32
+    Log("=== build: Windows x64 -- Smooth Wheel Scroll 1.7.7");
+#else
+    Log("=== build: macOS -- TEST BUILD for the port, NOT yet verified on a Mac");
+#endif
+    Log("=== wheel hook = %s", g_hookInstalled ? "installed" : "NOT installed");
+#ifndef _WIN32
+    if (!g_hookInstalled)
+    {
+      Log("=== >>> wheels will NOT be animated. Grant REAPER the Accessibility permission:");
+      Log("=== >>>   System Settings > Privacy & Security > Accessibility, then reload the plugin");
+    }
+#endif
+    Log("=== reaper=%s", (GetAppVersion ? GetAppVersion() : "unknown"));
+    Log("=== glide master switch = %s", g_glideOn ? "ON" : "OFF (nothing will be animated)");
+    Log("=== settings: window=%.0fms start=%.1fd budget=%.0fd speedmul=%.2f",
+        g_windowMs, g_startDeltas, g_budgetDeltas, g_speedMul);
+  }
+
   Log("loaded main=%p", (void *)g_main);
   return 1;
 }
 
 // ---------------------------------------------------------------------------
+// THE TWO EXPORTED NAMES.
+//
+// Windows: REAPER looks for `ReaperPluginEntry` in the DLL's export table. Exported straight from
+// this file.
+//
+// macOS: platform/mac/entry_mac.mm defines `ReaperPluginEntry` as a thin wrapper (it has to wake the
+// platform layer first, and there is no DllMain to do it), then calls `SwsSharedEntry`. The wrapper
+// is compiled only for that platform, so the two definitions never meet -- hence the #ifdef around
+// the Windows spelling below.
+// ---------------------------------------------------------------------------
+#ifdef _WIN32
+extern "C" __declspec(dllexport) int ReaperPluginEntry(HINSTANCE hInst, reaper_plugin_info_t *rec)
+{
+  return SwsEntryImpl((void *)hInst, rec);
+}
+#endif // _WIN32
+
+// SwsSharedEntry is defined for BOTH platforms: it is the single startup implementation, and the
+// macOS entry point (platform/mac/entry_mac.mm) calls it after waking the platform layer.
+extern "C" int SwsSharedEntry(void *hInst, reaper_plugin_info_t *rec)
+{
+  return SwsEntryImpl(hInst, rec);
+}
+
+// ---------------------------------------------------------------------------
+// PLATFORM ADAPTORS (Windows side).
+//
+// The panel, the wheel hook and the hit test still live in THIS file: they read the action table,
+// the per-axis integrator state and REAPER's dock, so moving them wholesale would be a rewrite
+// rather than a relocation. These six functions are the whole of the platform interface's remaining
+// surface on Windows, and each is a one-line forwarder.
+//
+// WHY THIS IS NOT A SMELL: the platform interface exists so the Mac build can supply its own
+// implementations without the shared code knowing which platform it is on. On Windows the
+// implementation happens to be the code directly above. The indirection is one call, it is visible
+// in one place, and it means no caller anywhere has to care.
+//
+// The functions above are `static`; they are reachable from here because this is the same
+// translation unit. Nothing else in the plugin is affected.
+//
+// ★ GUARDED BY _WIN32. On macOS these same six functions are implemented in platform/mac/, and the
+// two definitions must never meet -- a duplicate symbol is a link error, and one that would only
+// appear on the platform nobody can build yet. The guard is what keeps Windows building unchanged
+// while letting the Mac build supply its own.
+// ---------------------------------------------------------------------------
+#ifdef _WIN32
+namespace plat
+{
+bool WheelHookInstall()
+{
+  InstallHook();
+  return true; // a WH_GETMESSAGE hook needs no permission; failure shows up as no messages, not
+               // as a refusal, and the plugin already handles that by scrolling natively
+}
+
+void WheelHookRemove()
+{
+  if (g_msgHook)
+  {
+    UnhookWindowsHookEx(g_msgHook);
+    g_msgHook = nullptr;
+  }
+}
+
+PlatHit HitTest()
+{
+  // The real hit test is inside the message hook (it asks WindowFromPoint and reads the class
+  // name). Exposing it as a standalone call would mean duplicating that logic, so it reports "the
+  // platform cannot answer standalone" -- which is TRUE here and is what the Mac build reports too.
+  // The hook's own path is unaffected.
+  PlatHit hit;
+  hit.window = nullptr;
+  hit.valid = false;
+  return hit;
+}
+
+bool PlatPanelPresent()
+{
+#ifdef SWS_NO_SETTINGS_UI
+  return false;
+#else
+  return true;
+#endif
+}
+
+void PanelShow()
+{
+#ifndef SWS_NO_SETTINGS_UI
+  ShowConfigWindow();
+#endif
+}
+
+void PanelToggle()
+{
+#ifndef SWS_NO_SETTINGS_UI
+  ToggleConfigWindow();
+#endif
+}
+
+bool PanelVisible()
+{
+#if defined(SWS_NO_SETTINGS_UI)
+  return false;
+#else
+  if (!g_cfgWnd)
+    return false;
+  // Docked counts as visible: REAPER hides a window living in a collapsed docker, but it is still
+  // the panel the user asked for (see the note on ToggleConfigWindow).
+  return DockIsChildOfDock(g_cfgWnd, nullptr) >= 0 || IsWindowVisible(g_cfgWnd) != FALSE;
+#endif
+}
+
+void PanelRefresh()
+{
+#ifndef SWS_NO_SETTINGS_UI
+  // Nothing to do: the panel is repainted by the settings path itself whenever a value changes.
+  // Present as a named no-op so the interface has no holes to trip over later.
+#endif
+}
+
+} // namespace plat
+#endif // _WIN32
+
+
+// ---------------------------------------------------------------------------
+// DllMain -- Windows only, and it does almost nothing on purpose.
+//
+// The real startup is ReaperPluginEntry above, which REAPER calls; DllMain only suppresses the
+// thread-attach notifications the plugin has no use for. macOS has no DllMain at all -- its entry
+// point does the equivalent lifting (see platform/mac/entry_mac.mm).
+// ---------------------------------------------------------------------------
+#ifdef _WIN32
 BOOL WINAPI DllMain(HINSTANCE hInst, DWORD reason, LPVOID)
 {
   if (reason == DLL_PROCESS_ATTACH)
     DisableThreadLibraryCalls(hInst);
   return TRUE;
 }
+#endif // _WIN32

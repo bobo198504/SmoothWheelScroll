@@ -11148,3 +11148,169 @@ replay sec=32060 cmd=40432 val=114 valhw=-1    ← 14 单位一发
 
 **14 扇门全过**，三种构建（默认 / `--wheel-log` / `--no-settings-ui`）均可编译。
 `filter_probe` 断言未改动 —— **投递路由没变**（这版只加系数，没动 `FilterFor`）。
+
+---
+
+## 138. macOS 移植：第一刀（2026-11-03）
+
+**用户要求**：直接做，发测试版，他找人测。**没有 Mac 机器。**
+
+**详细设计见 `MACOS-PORT.md`**，本节只记**结论与教训**。
+
+### 一、★ 一个先要纠正的前提
+
+**用户说"影响手感的只有模型，模型不变手感就不变"** —— 基本对，但**有一个例外**：
+
+**帧时钟的频率也影响手感**。Windows 的 `SetTimer(5ms)` **实测被钳到 15.6ms**（§10.1）。
+mac 的 GCD 定时器若真按 5ms 跑，**步数会是 Windows 的三倍**，手感明显不同。
+
+→ **`time_mac.mm` 刻意对齐【Windows 实测的 15.6ms】，不是对齐请求值 5ms**。
+`kCoalesceMs` 是唯一的调节点。**这是"移植后手感一致"与"mac 更丝滑"之间的一个主动选择**，
+不是 bug。
+
+### 二、架子怎么拆的（**只拆了一刀，不是全部**）
+
+**新增 `src/platform.h`**：平台接口，**只声明真正非平台不可的东西** ——
+滚轮钩子、帧时钟、命中测试、可选面板、单调时钟。
+**规则：能写成可移植 C++ 的，就不许进这个头。**
+
+**新增 `src/platform/win32/`**：`time_win32.cpp`（时钟）、`wheel_win32.cpp`（滚轮查询）。
+
+**★ 面板、钩子程序、命中测试【没有搬】**，仍在 `smooth_wheel_scroll.cpp`，
+**用 6 个一行转发函数接上接口**（文件末尾 `#ifdef _WIN32` 的 `namespace plat`）。
+
+**理由**：那三块**读动作表、读积分器状态、读 REAPER 的 dock** —— 搬 = 重写 3000 行，
+**而且是"无人可验的重写"**。这正是 §0 禁止的平行重写。转发是一层间接、一眼可见，
+并且让 Mac 侧能提供自己的实现而调用方无需知道。
+
+### 三、入口拆成三段
+
+```
+SwsEntryImpl（平台无关的启动实现）
+   ├─ Windows: __declspec(dllexport) ReaperPluginEntry → 直接调用
+   └─ macOS:   entry_mac.mm 定义 ReaperPluginEntry（唤醒平台层）→ 调 SwsSharedEntry
+```
+
+**★ 差点踩的坑（记下来）**：Mac 入口如果**也叫 `ReaperPluginEntry` 并调用 `ReaperPluginEntry`**，
+**在同一个编译单元里那个名字指的就是它自己** → **无限递归**，
+而且**优化器可以把自调用变成死循环，不一定表现为崩溃**。
+所以共享实现另起名 `SwsSharedEntry`。
+
+### 四、验证到了什么程度（**诚实分级**）
+
+| 项 | 证据 |
+|---|---|
+| **Windows 行为不变** | ✅ **强**：14 扇门全过 + **导出表与 1.7.7 完全一致**（只有 `ReaperPluginEntry`）|
+| **`.text` 变化** | ⚠️ `0x15030` → **`0x15590`（+1248 字节）** = 转发层未被内联的成本。**预期内，不是回归** |
+| **Mac 声明/定义齐全** | ✅ 机械核对：`platform.h` 每个函数在 mac 侧都有定义 |
+| **Mac 代码能编译** | ❌ **完全未知** |
+| **Mac 上能跑** | ❌ **完全未知** |
+
+### 五、★★ 工具链：这台机器的网络拿不到
+
+**试过全部失败**（都要记下来，省得下次重试）：
+
+| 途径 | 结果 |
+|---|---|
+| `ziglang.org` 直连 | **超时**，连 417 字节的 `index.json` 都失败 |
+| `ziglang.org` 走代理 7897 | **4 KB/s** |
+| GitHub 直连 | **7 KB/s** |
+| GitHub 走代理 7897 | **TLS 握手失败**（`schannel`）|
+| 华为云 / 清华 / 中科大 / 南大 / 北外 / 阿里 | **404 或返回 HTML 错误页**（国内镜像**没有同步 zig**）|
+| `npmmirror` | **`[NOT_FOUND] Binary "zig" not found`** |
+| `winget install LLVM.LLVM` | **`InternetReadFile() failed`**（同样卡在 GitHub）|
+
+**★ 而且即使装好 Zig，价值也有限**：Zig 自带 macOS libc，**但没有 Cocoa/AppKit 的 `.tbd`**，
+`#import <ApplicationServices/...>` 照样编译不过。**Zig 只能验证"自己写的语法"，
+验证不了"能不能连上系统框架"。**
+
+**真正的验证只有两条路**：一台 Mac，或 GitHub Actions 的 macOS runner（公开仓库免费）。
+
+### 六、Mac 侧的关键设计决定（都写进了 `MACOS-PORT.md`）
+
+| 决定 | 理由 |
+|---|---|
+| **event tap 只观察，不吞事件** | 吞事件需要知道 REAPER 会解析成哪个动作，而那是 REAPER 的 AppKit 内部行为，tap 看不到。改用**已有的动作表钩子**（`hookcommand2`，mac 上也调用）|
+| **命中测试返回"无法判断"** | mac **没有窗口类名**（Cocoa 的视图是对象，不是注册类）。**诚实地答不出，比猜着答好** —— 插件本来就有"没有命中信息"的工作模式 |
+| **不提供设置面板** | 面板是 3000 行手绘 Win32，**无法逐行翻译成 AppKit**。无面板是**受支持的形态**：设置全部从 extstate 读，`LoadSettings()` 在 `#ifndef SWS_NO_SETTINGS_UI` **之外**，无条件编译 |
+| **需要辅助功能权限** | `CGEventTapCreate` 要 Accessibility。**没授权时 tap 建不起来 → 插件表现为"没有钩子"→ 不报错、不崩溃，只是不生效** |
+
+### 七、给测试者的第一条须知
+
+**"滚轮是原生的、没有缓动" → 先查【系统设置 → 隐私与安全性 → 辅助功能】里有没有 REAPER。**
+不要先怀疑代码。
+
+---
+
+## 139. ★ 触控板反向失效：一个**早就存在**的 bug（2026-11-06）
+
+**用户报告**："触控板的滚动反向没实现"（确认是**水平缩放**的翻转）。
+
+### 一、它不是重构引起的
+
+用户**不确定**以前是否正常，所以先用日志实测，**没有先怀疑自己的改动** —— 这是对的，因为
+`LastWheelWasTouchpad()` 那段逻辑我**没动过**。
+
+### 二、实测证据（DEV 版日志）
+
+**滚轮日志**（`UserPlugins\SmoothWheelScroll_wheel_log.txt`）：
+
+```
+touchpad  24 messages  deltas: 13 x2  31 x1  30 x1  128 x1  53 x2  97 x1 ...
+```
+
+**→ 设备判定是对的：`touchpad`。**
+
+**但动作日志里只有 `MATCH` + `kick`，没有 `touchpad reverse` 行** —— 反向被跳过。
+
+**关键：轴分布 `V: 26 条，H: 0 条`。**
+**双指上下滑产生的是【普通垂直滚轮消息】**（delta 细碎：13/30/49/53/97），不是 `WM_MOUSEHWHEEL`。
+
+### 三、根因
+
+```cpp
+static bool LastWheelWasTouchpad()
+{
+  return LastWheelDevice(true) == Device::kTouchpad;   // ← 只读【水平流】g_lastDevKindH
+}
+```
+
+**原来的推理是**："水平缩放一定由水平滚轮驱动，所以读水平流"。
+
+**但触控板双指上下滑走的是【垂直流】。** 设备记录写在 `g_lastDevKind`，
+而这里读 `g_lastDevKindH` → **没有记录 → 返回 `kNotched` → 不反向**。
+
+### 四、修复
+
+**读【两个流里较新的那个】**，而不是写死水平流：
+
+```cpp
+const DWORD tV = InterlockedCompareExchange(&g_lastDevTick, 0, 0);
+const DWORD tH = InterlockedCompareExchange(&g_lastDevTickH, 0, 0);
+const bool useH = (tH != 0) && (tV == 0 || (LONG)(tH - tV) > 0);
+return LastWheelDevice(useH) == Device::kTouchpad;
+```
+
+**⚠️ 比较必须是回绕安全的**：`GetTickCount` 每 49.7 天回绕，`tH > tV` 会错。
+**有符号差值 `(LONG)(tH - tV) > 0` 在任意两个相距 < 24.8 天的时刻都正确**，
+而超过 `kWheelFlagMs` 的记录本来就会被丢弃。
+
+**验证**：日志出现 72 次 `touchpad reverse ... (v=..., model bypassed)`，
+且符号正确翻转（`val=125 → val=3`，即 −2.25 → +2.25）。
+
+### 五、★★ 用户的范围纠正（**重要，以后每次都适用**）
+
+> **"不要任何擅自添加类似'Ctrl+滚轮'这种定义。该插件只是把用户的滚轮参数模拟成触控板。
+> 其它一切功能定义由投递层决定"**
+
+**我犯的错**：在解释修复时写成了"REAPER 把 Ctrl+这个鼠标滚轮解析成了水平缩放" ——
+**那是用户自己的快捷键绑定，跟插件无关，我不该拿它当解释。**
+
+**铁律**：
+- **插件不知道、也不关心是哪条动作、哪个修饰键、哪个绑定。**
+- 它只回答一个问题：**"刚才那个滚轮是什么设备"**。
+- **动作与语义的归属方是【投递层 / REAPER】**，不是插件。
+- **注释和解释里不许出现具体的组合键假设。**
+
+**同时要注意 `TouchpadZoomReverse` 里的范围限制**（`spec.axis == kHorizontal && kind == kZoom`）
+**是原有设计，不是我加的** —— 它只翻转水平缩放，不动滚动。要不要扩大是**功能决策，归用户定**。

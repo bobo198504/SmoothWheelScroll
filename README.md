@@ -77,13 +77,23 @@ REAPER 里滚一格，视图**瞬间跳一段**——**硬、顿、跳**，看�
 
 ## 安装
 
-Windows x64，REAPER 7。
+| 平台 | 文件 | 状态 |
+|---|---|---|
+| **Windows x64** | `reaper_smoothwheelscroll-x64.dll` | **正式** |
+| Windows ARM64 | `reaper_smoothwheelscroll-arm64.dll` | 测试（未在 ARM 上验证） |
+| macOS arm64 / x86_64 | 见 `MACOS-PORT.md` | **测试**，需自行编译 |
 
-1. 从 [Releases](../../releases) 下载 `reaper_smoothwheelscroll-x64.dll`。
+Windows x64 安装步骤：
+
+1. 从 [Releases](../../releases) 下载对应文件。
 2. 放进 `UserPlugins`：便携版 `<REAPER>/UserPlugins/`，普通安装 `%APPDATA%\REAPER\UserPlugins\`。
+   macOS 是 `~/Library/Application Support/REAPER/UserPlugins/`。
 3. 重启 REAPER。
 
-加载后显示为 `Smooth Wheel Scroll 1.7.5`。
+加载后显示为 `Smooth Wheel Scroll 1.8`；测试版会带 `DEV` 标记。
+
+**macOS 首次使用必须在【系统设置 → 隐私与安全性 → 辅助功能】里勾选 REAPER**，否则插件收不到滚轮。
+日志在 `$TMPDIR/SmoothWheelScroll.log`。
 
 ### 设置面板
 
