@@ -3,35 +3,51 @@
 ## 更新内容
 
 ```
+* 多平台重构：Windows x64 / Windows ARM64 / macOS，共用同一套模型与投递层
 * 支持 macOS（测试版）：滚轮缓动在 Mac 上可用
 * 支持 Windows ARM64
 + 启动时写入诊断日志，便于反馈问题
-# 触控板反向对水平缩放不生效
+# 触控板反向对水平缩放不生效（1.7.4 引入，已修复）
 ```
 
 ## What's changed
 
 ```
+* Multi-platform refactor: Windows x64 / Windows ARM64 / macOS share one model and delivery layer
 * macOS support (test build): wheel easing works on Mac
 * Windows ARM64 support
 + A diagnostic log is written at startup, to make reports easier
-# Touchpad reverse had no effect on horizontal zoom
+# Touchpad reverse had no effect on horizontal zoom (regression since 1.7.4, fixed)
 ```
 
 ---
 
 ## 说明（不写进 release 说明，只留档）
 
-### 一、`# 触控板反向对水平缩放不生效`
+### 一、`# 触控板反向对水平缩放不生效（1.7.4 引入，已修复）`
 
-**这是早就存在的 bug，不是 1.8 引入的。**
+**版本归属已核实**（逐个 tag 对比 `LastWheelWasTouchpad` 的实现）：
 
-`LastWheelWasTouchpad()` 只读水平滚轮那条记录流，而**触控板双指上下滑产生的是普通垂直滚轮消息**，
+| 版本 | 写法 | 结果 |
+|---|---|---|
+| 1.7.0～1.7.3 | `LastWheelDevice()`（不带参数） | ✅ 正常 |
+| **1.7.4** | `LastWheelDevice(true)` | ❌ **从这里开始坏** |
+| 1.7.5 / 1.7.6 / 1.7.7 | 同上 | ❌ 一直坏 |
+| 1.8 | 读两条流里较新的一条 | ✅ 修好 |
+
+**1.7.4 的提交**：`cc33664 Add: horizontal wheel + row-height compensation + top-up direction fix`
+—— 那次加入水平滚轮支持时把函数改成了只读水平流，之后没人发现。
+
+**根因**：`LastWheelWasTouchpad()` 只读水平滚轮那条记录流，而**触控板双指上下滑产生的是普通垂直滚轮消息**，
 记录写在垂直流里。读不到 → 判定"不是触控板" → 反向被跳过。
 
-改成读两条流里**较新的那条**（比较用有符号差值，`GetTickCount` 每 49.7 天回绕也安全）。
+**修法**：读两条流里**较新的那条**（比较用有符号差值，`GetTickCount` 每 49.7 天回绕也安全）。
 
 **实测**：日志出现 72 次 `touchpad reverse`，符号正确翻转（`val=125 → val=3`，−2.25 → +2.25）。
+
+**⚠️ 教训**：加入"水平滚轮"这类新概念时，凡是"读哪个轴"的选择都要问一句
+"**会不会有设备从另一个轴产生同样的结果**"。当时把"水平缩放 ⇒ 水平滚轮"当成了必然，
+而实际最常见的触发方式是触控板上下滑。
 
 ### 二、`* 支持 macOS（测试版）`
 
