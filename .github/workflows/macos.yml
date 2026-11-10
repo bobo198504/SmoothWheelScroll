@@ -8,7 +8,7 @@ name: macOS build
 # DLLs where users expect them.
 #
 # The two architectures are built as SEPARATE files (not one universal binary), matching the four
-# artifacts 1.8 ships: one per platform and architecture.
+# artifacts 1.8.1 ships: one per platform and architecture.
 #
 # A green job proves SDK compilation, linking and the exported entry point. It does not prove wheel
 # behaviour inside REAPER; that still requires a physical-Mac test.

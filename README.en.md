@@ -90,7 +90,7 @@ Windows x64 and a macOS arm64/x86_64 test build, for REAPER 7.
    `%APPDATA%\REAPER\UserPlugins\`.
 3. Restart REAPER.
 
-Once loaded it appears as `Smooth Wheel Scroll 1.8`; test builds carry a `DEV` marker.
+Once loaded it appears as `Smooth Wheel Scroll 1.8.1`; test builds carry a `DEV` marker.
 
 On macOS, put the `.dylib` matching `uname -m` into
 `~/Library/Application Support/REAPER/UserPlugins/` and restart REAPER. The macOS build uses an

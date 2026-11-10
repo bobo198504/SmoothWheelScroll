@@ -7097,16 +7097,14 @@ static int SwsEntryImpl(void *hInstVoid, reaper_plugin_info_t *rec)
   // user's screenshot, which is often all we get.
 //
 // ★ THE VERSION SUFFIX SAYS WHICH BUILD THIS IS, and on macOS it must, because there the release is
-// a TEST BUILD: nobody has run it on a Mac, and a tester needs to see that in REAPER's own list
-// rather than only in a forum post. The suffix is what distinguishes the four artifacts shipped for
-// 1.8 -- win-x64 (verified), win-arm64 (compiled, never run), and the two macOS dev builds (neither
-// compiled nor run here).
+// a TEST BUILD. The suffix distinguishes the four artifacts shipped for 1.8.1: win-x64 (verified),
+// win-arm64 (compiled, not run on ARM hardware), and the two macOS test builds.
 #ifdef SWS_WHEEL_LOG
-  rec->Register("ext_name", (void *)"Smooth Wheel Scroll 1.8 DEV (wheel log)");
+  rec->Register("ext_name", (void *)"Smooth Wheel Scroll 1.8.1 DEV (wheel log)");
 #elif defined(_WIN32)
-  rec->Register("ext_name", (void *)"Smooth Wheel Scroll 1.8");
+  rec->Register("ext_name", (void *)"Smooth Wheel Scroll 1.8.1");
 #else
-  rec->Register("ext_name", (void *)"Smooth Wheel Scroll 1.8 DEV (macOS test build)");
+  rec->Register("ext_name", (void *)"Smooth Wheel Scroll 1.8.1 DEV (macOS test build)");
 #endif
   rec->Register("ext_vendor", (void *)"SmoothWheelScroll");
 

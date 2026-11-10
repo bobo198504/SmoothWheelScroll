@@ -89,7 +89,7 @@ Windows x64 安装步骤：
 2. 放进 `UserPlugins`：便携版 `<REAPER>/UserPlugins/`，普通安装 `%APPDATA%\REAPER\UserPlugins\`。
 3. 重启 REAPER。
 
-加载后显示为 `Smooth Wheel Scroll 1.8`；测试版会带 `DEV` 标记。
+加载后显示为 `Smooth Wheel Scroll 1.8.1`；测试版会带 `DEV` 标记。
 
 macOS 把与 `uname -m` 对应的 `.dylib` 放进
 `~/Library/Application Support/REAPER/UserPlugins/`，然后重启 REAPER。macOS 版使用进程内
