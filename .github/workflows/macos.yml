@@ -10,8 +10,8 @@ name: macOS build
 # The two architectures are built as SEPARATE files (not one universal binary), matching the four
 # artifacts 1.8 ships: one per platform and architecture.
 #
-# The job is allowed to fail loudly. This code has never run on a Mac, so a red build IS the
-# diagnostic result -- the compiler output is the useful thing, not the green check.
+# A green job proves SDK compilation, linking and the exported entry point. It does not prove wheel
+# behaviour inside REAPER; that still requires a physical-Mac test.
 
 on:
   workflow_dispatch: # run it by hand from the Actions tab
@@ -22,6 +22,7 @@ on:
     paths:
       - 'src/**'
       - 'build.sh'
+      - 'test/check_macos.sh'
       - '.github/workflows/macos.yml'
 
 permissions:
@@ -46,6 +47,9 @@ jobs:
           xcrun --show-sdk-path
           xcrun --sdk macosx --show-sdk-version
           clang++ --version
+
+      - name: Check the macOS host contract
+        run: bash test/check_macos.sh
 
       - name: Build both architectures
         run: |
@@ -86,4 +90,11 @@ jobs:
             echo "expected 2 dylibs, found $count -- not touching the release"
             exit 1
           fi
-          gh release upload "$tag" build/*.dylib --clobber --repo "$GITHUB_REPOSITORY"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$tag" build/*.dylib --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            # A tag can be pushed before its release page is created. Keep the green build and its
+            # downloadable workflow artifact; do not turn "release not created yet" into a build
+            # failure that hides perfectly good dylibs.
+            echo "release $tag does not exist yet; leaving the dylibs as workflow artifacts"
+          fi

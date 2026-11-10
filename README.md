@@ -1,7 +1,7 @@
 # Smooth Wheel Scroll for REAPER
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-![Platform: Windows x64](https://img.shields.io/badge/platform-Windows%20x64-blue)
+![Platform: Windows and macOS](https://img.shields.io/badge/platform-Windows%20%2B%20macOS-blue)
 
 一个原生 REAPER 扩展：把普通鼠标滚轮驱动的滚动/缩放变成平滑动画，**不改变滚轮原本做什么**。
 
@@ -71,7 +71,7 @@ REAPER 里滚一格，视图**瞬间跳一段**——**硬、顿、跳**，看�
 **触控板会被缓动吗？** 不会。触控板、触摸、触控笔一律原样交给 REAPER。
 
 **和 ReaPack 里的滚动类脚本有什么区别？** 那些是**动作/脚本**，要手动绑或触发；
-这个是**扩展（DLL）**，装上即对整条滚轮路径生效，且**不改变滚轮原本做什么**。
+这个是**原生扩展（DLL / dylib）**，装上即对整条滚轮路径生效，且**不改变滚轮原本做什么**。
 
 ---
 
@@ -81,24 +81,25 @@ REAPER 里滚一格，视图**瞬间跳一段**——**硬、顿、跳**，看�
 |---|---|---|
 | **Windows x64** | `reaper_smoothwheelscroll-x64.dll` | **正式** |
 | Windows ARM64 | `reaper_smoothwheelscroll-arm64.dll` | 测试（未在 ARM 上验证） |
-| macOS arm64 / x86_64 | 见 `MACOS-PORT.md` | **测试**，需自行编译 |
+| macOS arm64 / x86_64 | `reaper_smoothwheelscroll-mac-<arch>.dylib` | **测试版** |
 
 Windows x64 安装步骤：
 
 1. 从 [Releases](../../releases) 下载对应文件。
 2. 放进 `UserPlugins`：便携版 `<REAPER>/UserPlugins/`，普通安装 `%APPDATA%\REAPER\UserPlugins\`。
-   macOS 是 `~/Library/Application Support/REAPER/UserPlugins/`。
 3. 重启 REAPER。
 
 加载后显示为 `Smooth Wheel Scroll 1.8`；测试版会带 `DEV` 标记。
 
-**macOS 首次使用必须在【系统设置 → 隐私与安全性 → 辅助功能】里勾选 REAPER**，否则插件收不到滚轮。
-日志在 `$TMPDIR/SmoothWheelScroll.log`。
+macOS 把与 `uname -m` 对应的 `.dylib` 放进
+`~/Library/Application Support/REAPER/UserPlugins/`，然后重启 REAPER。macOS 版使用进程内
+AppKit 监视器，**不需要辅助功能权限**。日志在 `$TMPDIR/SmoothWheelScroll.log`。
 
 ### 设置面板
 
-**Extensions 菜单** → `SmoothScroll...`；或在 **Actions 窗口**用 `Smooth Wheel Scroll: settings...`
-（可绑快捷键，再按一次关闭）。改动即时生效、自动保存。
+Windows 可从 **Extensions 菜单** → `SmoothScroll...` 打开；两个平台都可以在 **Actions 窗口**
+搜索 `Smooth Wheel Scroll: settings...`（可绑快捷键；Windows 可再按一次关闭，macOS 可点窗口关闭按钮）。
+改动即时生效、自动保存。
 
 * **Glide length** — 一格动画的时长（100–300 ms，默认 200）
 * **Slow step** — 慢轮一格走多少（1–10 delta，默认 5）
@@ -106,7 +107,11 @@ Windows x64 安装步骤：
 * **Top speed** — 最快时超过自身速度的倍数（1.0–2.0×，默认 1.5）
 * **总开关** —— 关掉即完全放行，滚轮回到原生行为
 
-滑杆下方是**运动轨迹图**：每收到一个滚轮消息就有一颗球沿路径跑，直观显示当前设置的效果。
+Windows 面板的滑杆下方是**运动轨迹图**：每收到一个滚轮消息就有一颗球沿路径跑，直观显示当前设置的效果。
+
+macOS 版使用原生 Cocoa 面板，提供四个核心滑杆、总开关和“触控板水平缩放反向”开关；
+在 Actions 窗口搜索 `Smooth Wheel Scroll: settings...` 即可打开。两项设置都写入 REAPER
+ExtState 的 `SmoothWheelScroll` 段。
 
 ### 缩放与滚动距离
 
@@ -118,6 +123,8 @@ Windows x64 安装步骤：
 
 面板底部的八个旋钮，**每个管一个视图的一个方向**：主视图与 MIDI 编辑器的滚动、缩放，
 垂直与水平分开，另加调音台滚动。
+
+这八个旋钮目前只在 Windows 面板中；macOS 紧凑面板提供四个核心滑杆和两个开关。
 
 | 旋钮 | 管什么 |
 |---|---|
@@ -138,9 +145,11 @@ Windows x64 安装步骤：
   <img src="test/settings-light.png" alt="设置面板（浅色）" width="330">
 </p>
 
+<sub>截图为 Windows 面板；macOS 使用同设置的紧凑 Cocoa 面板。</sub>
+
 ### 卸载
 
-删掉 DLL，重启 REAPER。
+删掉 DLL / dylib，重启 REAPER。
 
 ---
 
@@ -153,12 +162,16 @@ C++17 编译器，对着仓库内的 REAPER SDK（`third_party/`）编译。参�
 ./deploy.sh       # 可选：复制进 UserPlugins
 ```
 
+macOS 需要在 Mac 上运行 `./build.sh --mac`，生成 arm64 与 x86_64 两个 dylib；GitHub Actions
+也会在 `macos-latest` 上执行相同的构建。
+
 | 参数 | 作用 |
 |---|---|
 | *（无）* | 含设置面板（默认） |
 | `--no-settings-ui` | 不编译设置面板 |
 | `--debug-log` | 附加诊断日志（`%TEMP%\SmoothWheelScroll.log`） |
 | `--wheel-log` | DEV 版：把最近的滚轮消息记到插件同目录，用于设备排查 |
+| `--mac` | 构建 macOS arm64 / x86_64 两个测试版 dylib |
 
 回归门（脱离 REAPER 运行）：
 
@@ -166,6 +179,7 @@ C++17 编译器，对着仓库内的 REAPER SDK（`third_party/`）编译。参�
 ./test/check_anim3.sh          ./test/check_conservation.sh   ./test/check_travel.sh
 ./test/check_device.sh         ./test/check_routes.sh         ./test/check_classify.sh
 ./test/check_filter.sh         ./test/check_wheel_log.sh      ./test/check_macro.sh
+./test/check_macos.sh
 ```
 
 ---
@@ -180,6 +194,9 @@ C++17 编译器，对着仓库内的 REAPER SDK（`third_party/`）编译。参�
 | `src/routing.h` | 投递路由：哪条动作、什么粒度 |
 | `src/device.h` | 设备分类（有格 / 无级 / 触控板） |
 | `src/macro.h` | 自定义动作成分解析 |
+| `src/platform.h` | 操作系统中立接缝：滚轮、命中、时钟、面板 |
+| `src/platform/win32/` | Win32 时钟与滚轮适配 |
+| `src/platform/mac/` | AppKit 进程内滚轮监视器、GCD 时钟、入口 |
 | `src/smooth_wheel_scroll.cpp` | REAPER 扩展：分类、喂入、投递、设置面板 |
 | `test/` | 回归门 |
 | `versions/<ver>/` | 各版本冻结快照 |
@@ -189,7 +206,9 @@ C++17 编译器，对着仓库内的 REAPER SDK（`third_party/`）编译。参�
 
 ## 限制
 
-* 仅 Windows x64；macOS / Linux 需要各自的窗口钩子实现。
+* Windows x64 是正式版；Windows ARM64 与 macOS 仍是测试版，尚未完成对应真机上的全部设备验证。
+* macOS 通过动作表缓动；只由原生控件处理、不经过动作表的滚轮区域可能保持原生行为。
+* Linux 尚未移植。
 * 无级滚轮的支持未经实机验证。
 * 设备本身已带惯性时，可能感到双重缓动。
 

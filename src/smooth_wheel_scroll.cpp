@@ -1115,8 +1115,10 @@ static void AnimRebuild() {}
 // Settings window (defined further down); its action id is handled in OnAction.
 static void ShowConfigWindow();
 static void ToggleConfigWindow();
-static int g_cmdTune;
 #endif
+// The Windows panel and the Cocoa panel both expose one action. Keep the id in the shared layer so
+// OnAction dispatches to the platform's own optional panel.
+static int g_cmdTune;
 
 // Clamp every runtime value into its slider range. The sliders and any loaded setting
 // both go through here, so no value outside the range can ever reach the model --
@@ -1236,6 +1238,36 @@ static void SaveSettings()
   Log("settings saved: window=%.0fms start=%.1fd budget=%.0fd mul=%.2f glide=%d dock=%d", g_windowMs,
       g_startDeltas, g_budgetDeltas, g_speedMul, g_glideOn ? 1 : 0, g_dockOn ? 1 : 0);
 }
+
+#ifndef _WIN32
+// The Cocoa panel and the runtime settings use one store and one clamp path. `apply == false` fills
+// the panel's snapshot; `apply == true` copies a user change back, clamps it, and persists it through
+// the same SaveSettings() the Windows panel uses.
+static void PanelSettingsBridge(plat::PlatPanelSettings *settings, bool apply)
+{
+  if (!settings)
+    return;
+  if (!apply)
+  {
+    settings->windowMs = g_windowMs;
+    settings->startDeltas = g_startDeltas;
+    settings->budgetDeltas = g_budgetDeltas;
+    settings->speedMul = g_speedMul;
+    settings->glideOn = g_glideOn;
+    settings->touchpadReverse = g_touchpadReverse;
+    return;
+  }
+
+  g_windowMs = settings->windowMs;
+  g_startDeltas = settings->startDeltas;
+  g_budgetDeltas = settings->budgetDeltas;
+  g_speedMul = settings->speedMul;
+  g_glideOn = settings->glideOn;
+  g_touchpadReverse = settings->touchpadReverse;
+  RefreshDerived();
+  SaveSettings();
+}
+#endif
 
 // Read a key back as a double; returns false when absent or unparseable, so the
 // caller keeps its current (default) value.
@@ -2738,9 +2770,62 @@ static bool LastWheelWasTouchpad()
 // re-offering of the resolved action would animate what the hook just declined.
 static bool LastWheelPassedThrough(bool horizontal)
 {
+#ifndef _WIN32
+  // macOS has one process-local monitor and therefore one authoritative "most recent wheel",
+  // regardless of which action axis the host resolved it to. A vertical two-finger gesture can be
+  // bound to a horizontal zoom, so reading only the action's axis would classify it as a notched
+  // wheel and animate a touchpad that the monitor already identified as continuous.
+  (void)horizontal;
+  return LastWheelWasTouchpad();
+#else
   const Device d = LastWheelDevice(horizontal);
   return d == Device::kTouchpad || d == Device::kUnknown;
+#endif
 }
+
+#ifndef _WIN32
+// Bring the platform monitor's latest observation into the same per-axis records the action path
+// already uses on Windows. This is deliberately the ONLY bridge between platform and shared state.
+//
+// `sequence` makes the bridge one-shot. Unrelated keyboard/mouse input and application deactivation
+// produce a valid=false observation with a new sequence, which clears stale latches and device
+// records before the next action is considered.
+static unsigned long long g_lastPlatformWheelSequence = 0;
+static void SyncPlatformWheel()
+{
+  const PlatWheelEvent event = plat::LastWheel();
+  if (event.sequence == g_lastPlatformWheelSequence)
+    return;
+  g_lastPlatformWheelSequence = event.sequence;
+
+  const DWORD now = (DWORD)GetTickCount();
+  const bool recent =
+      event.valid && event.timestampMs >= 0.0 &&
+      (DWORD)(now - (DWORD)event.timestampMs) <= kWheelFlagMs;
+  if (!recent)
+  {
+    // The local monitor is the authority once installed. With no wheel behind this action, clear
+    // both axes so an older touchpad observation cannot suppress the new command.
+    if (g_hookInstalled)
+    {
+      InterlockedExchange(&g_wheelTick, 0);
+      InterlockedExchange(&g_wheelTickH, 0);
+      InterlockedExchange(&g_lastDevTick, 0);
+      InterlockedExchange(&g_lastDevTickH, 0);
+    }
+    return;
+  }
+
+  const DWORD tick = (DWORD)event.timestampMs;
+  const Device kind = event.continuous ? Device::kTouchpad : Device::kNotched;
+  volatile LONG *latch = event.horizontal ? &g_wheelTickH : &g_wheelTick;
+  volatile LONG *kindSlot = event.horizontal ? &g_lastDevKindH : &g_lastDevKind;
+  volatile LONG *tickSlot = event.horizontal ? &g_lastDevTickH : &g_lastDevTick;
+  InterlockedExchange(latch, (LONG)tick);
+  InterlockedExchange(kindSlot, (LONG)kind);
+  InterlockedExchange(tickSlot, (LONG)tick);
+}
+#endif
 
 static bool TouchpadZoomReverse(const ActionSpec &spec, int section, int command, int val, int valhw,
                                 HWND hwnd)
@@ -2784,6 +2869,12 @@ static bool OnAction(KbdSectionInfo *sec, int command, int val, int val2, int re
     // A TOGGLE, not just "open": the action can be bound to a key and pressed again to
     // close the panel, so the same binding both opens and closes it.
     ToggleConfigWindow();
+    return true;
+  }
+#elif !defined(_WIN32)
+  if (g_cmdTune && command == g_cmdTune)
+  {
+    plat::PanelToggle();
     return true;
   }
 #endif
@@ -2836,6 +2927,10 @@ static bool OnAction(KbdSectionInfo *sec, int command, int val, int val2, int re
     }
     return false;
   }
+
+#ifndef _WIN32
+  SyncPlatformWheel();
+#endif
 
   if (TouchpadZoomReverse(spec, sec->uniqueID, command, val, val2, hwnd))
     return true; // consumed, so REAPER's own pass does not undo the sign flip
@@ -3945,8 +4040,8 @@ static void InstallHook()
 #else // !_WIN32
 
 // ---------------------------------------------------------------------------
-// macOS: no message hook exists. The wheel is observed by a CGEventTap instead (platform/mac/
-// wheel_mac.mm), which needs no installation on a thread and is created through the platform layer.
+// macOS: no Win32 message hook exists. The wheel is observed by a process-local NSEvent monitor
+// (platform/mac/wheel_mac.mm), which is created through the platform layer on the UI thread.
 //
 // InstallHook keeps its name so the startup code above calls the same function on both platforms;
 // what changes is what "installing" means.
@@ -3963,17 +4058,16 @@ static void InstallHook()
 
   if (!plat::WheelHookInstall())
   {
-    // Almost always the Accessibility permission. Reported in plain words because a tester whose
-    // wheels are not animating will otherwise have nothing to go on: without the tap the plugin
-    // sees no wheel at all and simply behaves like one that was never installed.
+    // A local AppKit monitor needs no privacy grant. Failure means the host/run-loop did not accept
+    // the monitor; without it the action path still runs, using its conservative notched fallback.
     g_hookInstalled = false;
-    Log("wheel hook NOT installed -- CGEventTap refused");
-    Log("  >>> grant REAPER Accessibility permission:");
-    Log("  >>>   System Settings > Privacy & Security > Accessibility, then reload the plugin");
+    Log("wheel observer NOT installed -- NSEvent local monitor refused");
+    Log("  >>> wheels will use the conservative action-only fallback");
     return;
   }
   g_hookInstalled = true;
-  Log("wheel hook -> CGEventTap installed (thread %lu)", (unsigned long)g_uiThreadId);
+  Log("wheel observer -> NSEvent local monitor installed (thread %lu)",
+      (unsigned long)g_uiThreadId);
 }
 
 #endif // _WIN32
@@ -6805,16 +6899,20 @@ static void RemoveAll()
   // Stop seeing the keyboard queue before the rest of the plugin goes away.
   plugin_register("-accelerator", (void *)&g_accel);
 #endif
+#ifdef _WIN32
   if (g_msgHook)
   {
-#ifdef _WIN32
     UnhookWindowsHookEx(g_msgHook);
-#else
-    // macOS: the "hook" is the platform's event tap; tearing it down is the platform's job.
-    plat::WheelHookRemove();
-#endif
     g_msgHook = nullptr;
   }
+#else
+  plat::PanelShutdown();
+  // The macOS monitor is not represented by g_msgHook. Call this unconditionally: it is idempotent,
+  // and a non-null check here previously leaked the observer across every plugin reload.
+  plat::WheelHookRemove();
+  g_msgHook = nullptr;
+  g_hookInstalled = false;
+#endif
   if (g_animWnd && IsWindow(g_animWnd))
   {
     DestroyWindow(g_animWnd);
@@ -7017,6 +7115,10 @@ static int SwsEntryImpl(void *hInstVoid, reaper_plugin_info_t *rec)
   // runtime, and until then every wheel is forwarded untouched.
   LoadSettings();
 
+#ifndef _WIN32
+  plat::PanelBindSettings(&PanelSettingsBridge);
+#endif
+
   // Point each axis at its macro child spec array (see the note on Integrator::macroChild). Without
   // this the macro path would see a null pointer and refuse every macro.
   BindMacroChildArrays();
@@ -7062,6 +7164,13 @@ static int SwsEntryImpl(void *hInstVoid, reaper_plugin_info_t *rec)
   // Hand keys the panel does not use back to REAPER, so a bound shortcut keeps working
   // while the panel has focus (see PanelKeyHandler).
   rec->Register("accelerator", (void *)&g_accel);
+#elif !defined(_WIN32)
+  // macOS keeps the shared Win32 panel compiled out, but provides its own Cocoa panel through the
+  // platform interface. Register the same user-facing action; no accelerator hook is needed because
+  // AppKit delivers the shortcut through REAPER normally.
+  static custom_action_register_t s_macTuneAction = {
+      0, "SWS_SCROLL_TUNE", "Smooth Wheel Scroll: settings...", nullptr};
+  g_cmdTune = rec->Register("custom_action", &s_macTuneAction);
 #endif
 
   rec->Register("atexit", (void *)OnExit);
@@ -7078,8 +7187,8 @@ static int SwsEntryImpl(void *hInstVoid, reaper_plugin_info_t *rec)
   //
   //   1. WHERE the log is          -- so the tester can find it in the first place;
   //   2. WHICH build and platform  -- a report is useless without knowing what produced it;
-  //   3. whether the WHEEL HOOK is installed -- on macOS this is the Accessibility permission, and
-  //      without it the plugin sees no wheel at all and looks completely dead;
+  //   3. whether the WHEEL OBSERVER is installed -- on macOS this is the process-local NSEvent
+  //      monitor; without it the plugin uses its action-only fallback;
   //   4. whether the GLIDE is ON   -- the master switch, and the single most common reason "nothing
   //      happened" that has nothing to do with the port.
   //
@@ -7099,8 +7208,8 @@ static int SwsEntryImpl(void *hInstVoid, reaper_plugin_info_t *rec)
 #ifndef _WIN32
     if (!g_hookInstalled)
     {
-      Log("=== >>> wheels will NOT be animated. Grant REAPER the Accessibility permission:");
-      Log("=== >>>   System Settings > Privacy & Security > Accessibility, then reload the plugin");
+      Log("=== >>> NSEvent local monitor unavailable; action-only fallback is active");
+      Log("=== >>> no Accessibility permission is requested by this build");
     }
 #endif
     Log("=== reaper=%s", (GetAppVersion ? GetAppVersion() : "unknown"));
@@ -7232,6 +7341,11 @@ void PanelRefresh()
   // Nothing to do: the panel is repainted by the settings path itself whenever a value changes.
   // Present as a named no-op so the interface has no holes to trip over later.
 #endif
+}
+
+void PanelShutdown()
+{
+  // The Win32 panel is destroyed by RemoveAll's existing g_cfgWnd branch.
 }
 
 } // namespace plat

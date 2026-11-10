@@ -96,6 +96,16 @@ struct PlatWheelEvent
                                //   macOS from kCGScrollWheelEventIsContinuous.
   bool hasExtraInfo = false;   // whether `extraInfo` is meaningful (Windows only; macOS leaves false)
   unsigned long long extraInfo = 0;
+  // The action callback runs after the host has turned a wheel into an action. These fields let the
+  // portable layer prove that the two belong together without guessing from wall-clock text:
+  //   * valid      -- a wheel observation exists (false after unrelated input or app deactivation);
+  //   * timestampMs-- monotonic milliseconds on the same scale as GetTickCount();
+  //   * sequence   -- grows for every observed/invalidation event, so one wheel is not re-consumed.
+  // Windows publishes its existing per-axis records through the shared code, so it leaves these at
+  // their defaults. macOS fills all three from the process-local monitor.
+  bool valid = false;
+  double timestampMs = -1.0;
+  unsigned long long sequence = 0;
 };
 
 // ---------------------------------------------------------------------------
@@ -162,9 +172,9 @@ PlatHit HitTest();
 // consumed the same way: when the host reports the resolved action, the plugin asks "was the wheel
 // behind this a touchpad" and either animates it or passes it through.
 //
-// Returning a zeroed event (delta 0, continuous false) means "no recent wheel", which the caller
-// treats as a notched device -- the conservative choice, since animating a wheel that was really a
-// touchpad would double-smooth something already smooth.
+// Returning an event with valid == false means "no wheel currently belongs to the next action".
+// A caller that has no platform observer at all may still use its notched-device fallback; a caller
+// that knows the observer is installed must treat this as an unrelated action and let it through.
 // ---------------------------------------------------------------------------
 PlatWheelEvent LastWheel();
 bool WheelHookDenied();
@@ -178,6 +188,26 @@ void PanelShow();     // create if needed, bring to front
 void PanelToggle();   // show if hidden, hide if shown
 bool PanelVisible();
 void PanelRefresh();  // re-read the store and repaint (used when settings arrive from elsewhere)
+void PanelShutdown(); // destroy the platform panel before unloading the shared library
+
+#ifndef _WIN32
+// The Cocoa panel lives in platform/mac/panel_mac.mm, while the settings values themselves live in
+// the shared extension. This tiny callback is the interface between them: read (apply == false) or
+// write-and-persist (apply == true). Keeping it here avoids a second settings store or a parallel
+// implementation of the feel controls.
+struct PlatPanelSettings
+{
+  double windowMs = 200.0;
+  double startDeltas = 5.0;
+  double budgetDeltas = 1000.0;
+  double speedMul = 1.5;
+  bool glideOn = true;
+  bool touchpadReverse = true;
+};
+
+typedef void (*PlatPanelSettingsFn)(PlatPanelSettings *settings, bool apply);
+void PanelBindSettings(PlatPanelSettingsFn fn);
+#endif
 
 // ---------------------------------------------------------------------------
 // WHERE EACH PLATFORM GETS THESE FROM, because neither implements all of them directly.
@@ -189,8 +219,9 @@ void PanelRefresh();  // re-read the store and repaint (used when settings arriv
 // here and not a smell: it is one indirection each, it is visible in one place, and it lets the Mac
 // build supply real implementations without the caller knowing which shape it got.
 //
-// macOS: everything is implemented here directly, except hit testing, which deliberately reports
-// "cannot tell" (there are no window class names to match) and the panel, which does not exist yet.
+// macOS: wheel observation, hit testing and the Cocoa panel are implemented in platform/mac/.
+// Hit testing still deliberately reports "cannot tell" because there is no faithful Cocoa analogue
+// of REAPER's registered Win32 window class names.
 //
 // The contract the caller relies on is only this: after PlatPanelPresent() returns true, the other
 // four do something sensible; after it returns false, they are harmless no-ops. Nothing above the

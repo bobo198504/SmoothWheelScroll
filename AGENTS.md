@@ -352,7 +352,9 @@
 
 ## 八、平台
 
-当前只做 Windows。macOS / Linux 需要各自的窗口钩子实现（本插件用 Win32 API），未包含。
+Windows x64 是正式平台；Windows ARM64 与 macOS 是测试构建。macOS 使用**进程内 NSEvent 监视器**
+观察 REAPER 自己的滚轮，**不要再改回全系统 CGEventTap，也不要要求辅助功能权限**。
+Linux 尚未移植。
 
 ## 九、改动自检清单（每次提交前逐条过）
 
@@ -11314,3 +11316,60 @@ return LastWheelDevice(useH) == Device::kTouchpad;
 
 **同时要注意 `TouchpadZoomReverse` 里的范围限制**（`spec.axis == kHorizontal && kind == kZoom`）
 **是原有设计，不是我加的** —— 它只翻转水平缩放，不动滚动。要不要扩大是**功能决策，归用户定**。
+
+---
+
+## 140. macOS：局部监视、设备桥接、卸载修复（2026-11-10）
+
+这一轮按“先正确、再优化”处理；**没有改共享模型、路由或投递数学**。
+
+### 一、确定的问题
+
+1. **`LastWheel()` 是死接口**：macOS 采到了 `continuous`，但共享 `OnAction` 从未读取。
+   触控板因此被当有格轮进入模型，反向也读不到触控板记录。
+2. **监听器卸载被 `g_msgHook` 卡住**：macOS 从不设置这个 Windows 句柄，`RemoveAll()` 永远不调用
+   `WheelHookRemove()`。重载会叠监听器；dylib 卸载后回调地址失效，有崩溃风险。
+3. **会话级 CGEventTap 过宽**：会看到所有 App，还要 Accessibility；插件就在 REAPER 进程里，
+   没有理由用全系统输入监控。
+4. **安装提示用了不存在的统一 dylib 名**：实际产物是 `-arm64` / `-x86_64` 两个。
+
+### 二、修法
+
+- `wheel_mac.mm` 改为 `[NSEvent addLocalMonitorForEventsMatchingMask:...]`。只观察 REAPER；
+  返回原事件，路由仍由 `hookcommand2` 决定；不需要辅助功能权限。
+- `PlatWheelEvent` 增加 `valid` / `timestampMs` / `sequence`。监视器对滚轮、键盘、鼠标按下和
+  App 失活写入新 sequence；共享层用 250ms 窗口把它同步到现有双轴设备记录和闩锁。
+- `continuous` → `Device::kTouchpad`，直接交回 REAPER；非连续 → `kNotched`，进入原模型。
+  **动作量仍从 REAPER 的 `val` 解码，不拿 NSEvent 的 delta 替代它。**
+- macOS 的 `LastWheelPassedThrough()` 读“最近一条”设备记录。触控板竖向手势可以被宿主动作表
+  解析成水平动作，不能只看动作轴。
+- `RemoveAll()` 在 macOS **无条件**先关 Cocoa 面板，再移除 monitor 和失活通知观察者。
+- `TimeShutdown()` 先清 handler，再 cancel / release GCD source，避免重载泄漏和悬空回调。
+- Mac 入口先 `TimeShutdown()`，再调用共享卸载。
+
+### 三、Cocoa 设置面板
+
+- 共享 Win32 面板仍在 Mac 上编译排除；`panel_mac.mm` 只做紧凑 AppKit 面板：
+  四项核心滑杆、总开关、触控板水平缩放反向。
+- `PlatPanelSettingsFn` 是唯一桥：读快照 / 写回。写回仍走共享 `RefreshDerived()` +
+  `SaveSettings()`，**没有第二套设置存储，也没有第二套模型**。
+- 面板由标准 `custom_action` 打开，Actions 名称仍是
+  `Smooth Wheel Scroll: settings...`；不尝试把 Cocoa 窗口塞进 REAPER 的 Win32 dock。
+
+### 四、构建 / 文档 / 门
+
+- Mac 构建加 `-fblocks`；移除不再需要的 `ApplicationServices`。
+- arm64 最低 macOS 11.0，x86_64 保持 10.13；末尾安装提示用本机 `uname -m` 选真实产物。
+- 新增 `test/check_macos.sh`：守住“局部 monitor、不是 CGEventTap、共享层读取快照、
+  卸载调用、构建有 blocks”。它在 Windows Git Bash 可跑。
+- `README*.md` 删除“Mac 要辅助功能”“所有平台都有设置面板”“仅 Windows”等过期说法。
+- macOS CI 先跑该门再构建；release 页面还没创建时，保留 workflow artifact，不把上传失败
+  误报成构建失败。
+
+### 五、验证边界
+
+- ✅ Windows x64 重新构建；9 扇原有门全过；入口仍是唯一 `ReaperPluginEntry`。
+- ✅ 共享主文件用 Zig 分别按 `x86_64-macos` / `aarch64-macos` 编译通过。
+- ✅ `test/check_macos.sh` 通过。
+- ❓ `wheel_mac.mm` 的 AppKit 部分、完整 dylib 链接和 REAPER 内运行只能由 macOS CI / 真机确认。
+- ⏸ **`kCoalesceMs=15.6` 没改**。这是 Mac 是否更顺滑的产品选择，必须真机 A/B 后由用户决定。

@@ -36,11 +36,9 @@ for arg in "$@"; do
   esac
 done
 
-# The panel is compiled OUT on macOS. Not because it is unwanted -- it is the obvious next piece of
-# work -- but because SWELL provides no window creation there (no CreateWindowEx, no RegisterClass,
-# and SWELL_CreateXBridgeWindow is compiled out on OSX), so a Cocoa panel is a from-scratch UI rather
-# than a translation. A build with no panel still honours every saved setting: the plugin reads them
-# from REAPER's extstate, and LoadSettings() is compiled unconditionally.
+# The shared Win32 panel is compiled OUT on macOS because SWELL provides no RegisterClass /
+# CreateWindowEx route there. platform/mac/panel_mac.mm supplies a native Cocoa panel instead, so
+# the settings action and live persistence remain available without translating hand-drawn Win32.
 if [ "$MAC" = "1" ]; then
   NOSET_UI=1
 fi
@@ -84,16 +82,15 @@ fi
 # ---------------------------------------------------------------------------
 # MACOS
 #
-# * THIS BRANCH HAS NEVER BEEN RUN. The Windows development machine has no macOS SDK; the Mac-side
-# sources were checked with Zig's clang for a macOS TARGET, which proved they parse and typecheck,
-# but no .dylib has been produced or loaded. Treat every line below as a starting point.
+# * The macOS branch is built by GitHub's macOS runner. REAPER runtime validation still has to happen
+#   on a real Mac; a green CI job proves the SDK/link/export contract, not wheel behaviour.
 #
 # WHAT REAPER EXPECTS: a .dylib in ~/Library/Application Support/REAPER/UserPlugins exporting
 # ReaperPluginEntry with C linkage and default visibility.
 #
-# WHY -fno-rtti AND NOT -fobjc-arc: nothing here owns an Objective-C object with a lifetime -- the
-# tap and the timer are CoreFoundation / dispatch, managed by CFRelease and dispatch_suspend -- so
-# ARC would add runtime dependencies for nothing.
+# WHY -fobjc-arc: the NSEvent monitor and notification observer are Objective-C tokens. ARC gives
+# their globals the ownership they need; manual collection previously left the monitor token at risk
+# of being autoreleased. Dispatch objects use OS_OBJECT_USE_OBJC under ARC.
 #
 # WHY MACSDK IS A VARIABLE: `xcrun --show-sdk-path` is how a Mac finds it. A cross build elsewhere
 # must set it by hand; the macOS SDK cannot legally be redistributed, so this script bundles none.
@@ -110,9 +107,8 @@ if [ -z "${MACSDK:-}" ] || [ ! -d "$MACSDK" ]; then
   exit 1
 fi
 
-DYLIB="$OUT/reaper_smoothwheelscroll-mac.dylib"
 echo "== target =="
-echo "$DYLIB"
+echo "$OUT/reaper_smoothwheelscroll-mac-{arm64,x86_64}.dylib"
 echo "== sdk =="
 echo "$MACSDK"
 echo "== clang =="
@@ -166,21 +162,30 @@ INCS=(-I"$SDK" -I"$ROOT/third_party/reaper-sdk-git" -I"$ROOT/src")
 # declared as ordinary functions and the link fails with "undefined symbol". That is not a bug in
 # the plugin: it is the definition that tells SWELL who owns those functions.
 #
-# -mmacosx-version-min=10.13: the oldest whose SDK still has every API used here (the event tap and
-# dispatch are far older).
+# -mmacosx-version-min: Intel supports 10.13; Apple Silicon starts at 11.0. Using 10.13 for arm64
+# produces a deployment target that never existed and invites linker/notarisation warnings.
 build_arch() {
   local arch="$1"
   local out="$OUT/reaper_smoothwheelscroll-mac-$arch.dylib"
+  local minver="10.13"
+  if [ "$arch" = "arm64" ]; then
+    minver="11.0"
+  fi
   echo "== compiling ($arch) =="
-  clang++ -std=c++17 -O2 -dynamiclib -fno-rtti \
-    -arch "$arch" -mmacosx-version-min=10.13 \
+  clang++ -std=c++17 -O2 -dynamiclib -fno-rtti -fblocks -fobjc-arc \
+    -arch "$arch" -mmacosx-version-min="$minver" \
     -isysroot "$MACSDK" \
     -DNOMINMAX -DUNICODE -D_UNICODE -DSWELL_PROVIDED_BY_APP \
-    -framework CoreFoundation -framework ApplicationServices -framework Cocoa \
+    -framework Cocoa \
     "${DEFS[@]}" \
     "${INCS[@]}" \
     "${SOURCES[@]}" \
     -o "$out"
+
+  # Ad-hoc signing is enough for a local/CI plugin bundle and makes Gatekeeper diagnostics clearer.
+  # It creates no developer identity and does not imply notarisation.
+  codesign --force --sign - "$out"
+  codesign --verify --strict "$out"
 
   echo "== built: $out =="
   ls -l "$out"
@@ -195,6 +200,14 @@ build_arch x86_64
 
 echo ""
 echo "== install =="
-echo "  cp \"$DYLIB\" \"\$HOME/Library/Application Support/REAPER/UserPlugins/\""
+HOST_ARCH="$(uname -m)"
+case "$HOST_ARCH" in
+  arm64|x86_64) ;;
+  *)
+    echo "unsupported Mac architecture: $HOST_ARCH" >&2
+    exit 1
+    ;;
+esac
+echo "  cp \"$OUT/reaper_smoothwheelscroll-mac-$HOST_ARCH.dylib\" \"\$HOME/Library/Application Support/REAPER/UserPlugins/\""
 echo "== log =="
 echo "  open -e \"\$TMPDIR/SmoothWheelScroll.log\""

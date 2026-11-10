@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // platform/mac/entry_mac.mm -- the REAPER extension entry point on macOS.
 //
-// ★ STATUS: WRITTEN FROM THE DOCUMENTATION, NEVER COMPILED.
+// ★ STATUS: SOURCE READY; the latest change still needs the macOS CI build and a real-Mac run.
 //
 // WHAT THIS FILE IS *NOT*. It is not a second implementation of the plugin's startup. The real
 // startup -- loading the API table, reading rec->hwnd_main, registering hookcommand2 and the menu
@@ -49,8 +49,8 @@ extern "C" __attribute__((visibility("default"))) int ReaperPluginEntry(
   {
     // Unload: stop the clock BEFORE the shared code tears anything down, so no tick can arrive on a
     // half-dismantled plugin. The shared entry then deregisters the hooks.
-    const int rc = SwsSharedEntry(hInstance, (reaper_plugin_info_t *)nullptr);
     plat::TimeShutdown();
+    const int rc = SwsSharedEntry(hInstance, (reaper_plugin_info_t *)nullptr);
     return rc;
   }
 

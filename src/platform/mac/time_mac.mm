@@ -1,12 +1,7 @@
 // ---------------------------------------------------------------------------
 // platform/mac/time_mac.mm -- the frame clock and the monotonic clock, on macOS.
 //
-// ★ STATUS: WRITTEN FROM THE DOCUMENTATION, NEVER COMPILED. This file has not been built on a Mac
-// (the Windows development machine has no macOS SDK), so treat every line as unverified until a
-// tester reports a successful build. The likely first-build errors are: a wrong #include, an API
-// that moved between SDK versions, the GCD retain/release pairing, and the dispatch_source_t
-// lifecycle on unload. None of those are logic errors -- the logic is small -- so they should be
-// quick to clear.
+// ★ STATUS: SOURCE READY; the latest change still needs macOS CI and a real-Mac run.
 //
 // WHY OBJECTIVE-C++. dispatch is a C API, so plain C would nearly do; but the panel and the event
 // tap want AppKit and ApplicationServices respectively, and keeping one .mm per platform avoids a
@@ -35,9 +30,8 @@
 
 #include <dispatch/dispatch.h>
 #include <mach/mach_time.h>
-#include <pthread.h>
 
-#include <cstdio>
+#include <ctime>
 
 namespace
 {
@@ -98,6 +92,23 @@ void TimeInit()
 void TimeShutdown()
 {
   TimerStop();
+  if (g_source)
+  {
+    // Break the function pointer into the shared library before the bundle can unload, then cancel
+    // and release the source. The source is suspended after TimerStop(), so no further callback can
+    // start; release reclaims the object that was previously leaked on every reload.
+    dispatch_source_set_event_handler_f(g_source, nullptr);
+    dispatch_source_cancel(g_source);
+#if defined(OS_OBJECT_USE_OBJC) && OS_OBJECT_USE_OBJC
+    g_source = nullptr;
+#else
+    dispatch_release(g_source);
+    g_source = nullptr;
+#endif
+  }
+  g_tick = nullptr;
+  g_tickUser = nullptr;
+  g_next = 0;
 }
 
 void TimerStart(int periodMs, TickFn tick, void *user)

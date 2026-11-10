@@ -1,7 +1,7 @@
 # Smooth Wheel Scroll for REAPER
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-![Platform: Windows x64](https://img.shields.io/badge/platform-Windows%20x64-blue)
+![Platform: Windows and macOS](https://img.shields.io/badge/platform-Windows%20%2B%20macOS-blue)
 
 A native REAPER extension that turns wheel-driven scrolling and zooming into a smooth animation —
 **without changing what the wheel does**.
@@ -76,27 +76,33 @@ actually reports**, so a free-spinning wheel and a notched one feel the same at 
 **Will my touchpad be smoothed?** No. Touchpad, touch and pen input is passed to REAPER untouched.
 
 **How is this different from the scrolling scripts on ReaPack?** Those are **actions/scripts** you bind
-or trigger. This is an **extension (DLL)**: install it and the whole wheel path is affected, with
+or trigger. This is a **native extension (DLL/dylib)**: install it and the whole wheel path is affected, with
 **nothing about what the wheel does changed**.
 
 ---
 
 ## Install
 
-Windows x64, REAPER 7.
+Windows x64 and a macOS arm64/x86_64 test build, for REAPER 7.
 
 1. Download `reaper_smoothwheelscroll-x64.dll` from [Releases](../../releases).
 2. Put it in `UserPlugins`: portable `<REAPER>/UserPlugins/`, normal install
    `%APPDATA%\REAPER\UserPlugins\`.
 3. Restart REAPER.
 
-Once loaded it appears as `Smooth Wheel Scroll 1.7.5`.
+Once loaded it appears as `Smooth Wheel Scroll 1.8`; test builds carry a `DEV` marker.
+
+On macOS, put the `.dylib` matching `uname -m` into
+`~/Library/Application Support/REAPER/UserPlugins/` and restart REAPER. The macOS build uses an
+in-process AppKit monitor and **does not require Accessibility permission**. Its log is at
+`$TMPDIR/SmoothWheelScroll.log`.
 
 ### Settings panel
 
-**Extensions menu** → `SmoothScroll...`; or in the **Actions window** use
-`Smooth Wheel Scroll: settings...` (bindable to a key; press again to close). Changes apply live and
-are saved automatically.
+On Windows, open it from the **Extensions menu** → `SmoothScroll...`. On either platform, search the
+**Actions window** for `Smooth Wheel Scroll: settings...` (bindable to a key; Windows can toggle with
+that key again, while macOS uses the window's close button). Changes apply live and are saved
+automatically.
 
 * **Glide length** — how long one notch's animation takes (100–300 ms, default 200)
 * **Slow step** — how far a slow notch moves (1–10 delta, default 5)
@@ -104,8 +110,12 @@ are saved automatically.
 * **Top speed** — how far past the wheel's own speed the fastest rolls may climb (1.0–2.0x, default 1.5)
 * **Master switch** — off passes the wheel through untouched
 
-Below the sliders is a **motion chart**: every received wheel message launches a ball along the path,
-showing what the current settings do.
+The Windows panel has a **motion chart** below the sliders: every received wheel message launches a
+ball along the path, showing what the current settings do.
+
+The macOS build provides a native Cocoa panel with the four core sliders, the master switch and the
+trackpad horizontal-zoom reverse switch. Open it from the Actions window with
+`Smooth Wheel Scroll: settings...`. Values persist in REAPER's `SmoothWheelScroll` ExtState section.
 
 ### Zoom and scroll distance
 
@@ -118,6 +128,9 @@ row height, so scrolling a **shrunken arrange view** covers a distance comparabl
 
 The eight knobs at the bottom of the panel each own **one view's one direction**: scrolling and
 zooming, in the main view and the MIDI editor, vertical and horizontal apart, plus the mixer scroll.
+
+The eight per-surface knobs are currently Windows-only; the compact macOS panel exposes the four
+core sliders and two switches.
 
 | Knob | What it drives |
 |---|---|
@@ -140,9 +153,11 @@ factor only makes each jump longer, not smoother.
   <img src="test/settings-light.png" alt="Settings panel (light)" width="330">
 </p>
 
+<sub>Screenshots show the Windows panel; macOS uses a compact Cocoa panel with the same settings.</sub>
+
 ### Uninstall
 
-Delete the DLL and restart REAPER.
+Delete the DLL/dylib and restart REAPER.
 
 ---
 
@@ -156,12 +171,16 @@ portable MinGW-w64 toolchain.
 ./deploy.sh       # optional: copy it into UserPlugins
 ```
 
+On a Mac, run `./build.sh --mac` to produce separate arm64 and x86_64 dylibs. The GitHub Actions
+`macos-latest` job runs the same build.
+
 | Flag | Effect |
 |---|---|
 | *(none)* | includes the settings panel (default) |
 | `--no-settings-ui` | compiles the settings panel out |
 | `--debug-log` | adds diagnostic logging to `%TEMP%\SmoothWheelScroll.log` |
 | `--wheel-log` | DEV build: records recent wheel messages next to the DLL, for device diagnosis |
+| `--mac` | builds the macOS arm64 and x86_64 test dylibs |
 
 Regression gates (run standalone, no REAPER needed):
 
@@ -169,6 +188,7 @@ Regression gates (run standalone, no REAPER needed):
 ./test/check_anim3.sh          ./test/check_conservation.sh   ./test/check_travel.sh
 ./test/check_device.sh         ./test/check_routes.sh         ./test/check_classify.sh
 ./test/check_filter.sh         ./test/check_wheel_log.sh      ./test/check_macro.sh
+./test/check_macos.sh
 ```
 
 ---
@@ -183,6 +203,9 @@ Regression gates (run standalone, no REAPER needed):
 | `src/routing.h` | delivery routing: which action, at what granularity |
 | `src/device.h` | device classification (notched / free-spinning / touchpad) |
 | `src/macro.h` | parsing a custom action's contents |
+| `src/platform.h` | platform-neutral wheel, hit-test, clock and panel seam |
+| `src/platform/win32/` | Win32 clock and wheel adapters |
+| `src/platform/mac/` | in-process AppKit wheel monitor, GCD clock and entry point |
 | `src/smooth_wheel_scroll.cpp` | the REAPER extension: classify, feed, deliver, settings panel |
 | `test/` | the regression gates |
 | `versions/<ver>/` | frozen snapshots per release |
@@ -192,7 +215,11 @@ Regression gates (run standalone, no REAPER needed):
 
 ## Limitations
 
-* Windows x64 only; macOS and Linux would each need their own window-hook implementation.
+* Windows x64 is the production build; Windows ARM64 and macOS remain test builds without complete
+  device coverage on their target machines.
+* macOS smoothing is action-driven; surfaces handled only by native controls outside the action
+  table may retain their original behaviour.
+* Linux is not ported yet.
 * Free-spinning wheel support is unverified.
 * On a device that already smooths, you may feel both.
 

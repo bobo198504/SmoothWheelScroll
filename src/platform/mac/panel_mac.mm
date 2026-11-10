@@ -1,47 +1,226 @@
 // ---------------------------------------------------------------------------
-// platform/mac/panel_mac.mm -- the settings panel on macOS: NOT PRESENT YET.
+// platform/mac/panel_mac.mm -- a native Cocoa settings panel.
 //
-// ★ THIS IS THE ONE FILE IN THE PORT THAT GENUINELY IS A STUB, and it is a stub on purpose.
-//
-// The Windows panel is about 3000 lines of hand-drawn Win32: a fader control, a knob control, a
-// motion chart with rings and a running ball, theme detection, docking, window placement, keyboard
-// forwarding. None of that transposes to AppKit one line at a time -- the drawing primitives are
-// different, the layout model is different (Cocoa constraints vs absolute rectangles), and the
-// docking is REAPER's own Win32 dock rather than something a Cocoa window can join.
-//
-// Writing that blind would mean writing 3000 lines nobody can run, and every hour spent on it is an
-// hour that cannot go into making the wheel hook work, which is the part users actually feel.
-//
-// SO THE MAC BUILD SHIPS WITH NO PANEL, WHICH IS A SUPPORTED SHAPE. The plugin reads every setting
-// from REAPER's extstate (section "SmoothWheelScroll"), so a build with no UI still honours whatever
-// was saved. That gives a tester a working plugin with the DEFAULTS, which is the fastest route to
-// the answer we need first: does the wheel animate at all on macOS?
-//
-// WHAT A TESTER CAN DO IN THE MEANTIME: set the values by hand in the ExtState store. The keys are
-// documented in versions/<ver>/MODEL.md ("settings"), and the ones that matter for feel are
-// window / startd / budget / speedmul, plus the eight sspd0..sspd7 per-surface factors.
-//
-// THE HONEST SEQUENCE FROM HERE:
-//   1. Get the wheel path working (this build). No panel needed.
-//   2. Then the panel, as its own piece of work, WITH a Mac to try it on.
-//
-// A Cocoa panel is not impossible -- NSView subclasses with drawRect: cover the fader and the knob
-// easily, and the motion chart is a path -- but it is a from-scratch UI, not a translation, and it
-// should be done where it can be seen.
+// This is deliberately small: four model controls, the master switch and the touchpad-reverse
+// switch. It is not a port of the Windows hand-drawn panel. All values go through
+// PlatPanelSettingsFn, so the shared extension remains the only owner of settings and SaveSettings.
 // ---------------------------------------------------------------------------
 #include "../../platform.h"
 
+#import <Cocoa/Cocoa.h>
+
+using plat::PlatPanelSettings;
+using plat::PlatPanelSettingsFn;
+
+namespace
+{
+PlatPanelSettingsFn g_settingsBridge = nullptr;
+id g_panel = nil;
+
+NSString *FormatValue(NSInteger index, double value)
+{
+  switch (index)
+  {
+  case 0:
+    return [NSString stringWithFormat:@"%.0f ms", value];
+  case 1:
+    return [NSString stringWithFormat:@"%.1f delta", value];
+  case 2:
+    return [NSString stringWithFormat:@"%.0f delta", value];
+  default:
+    return [NSString stringWithFormat:@"%.2f x", value];
+  }
+}
+} // namespace
+
+@interface SwsMacPanel : NSWindowController <NSWindowDelegate>
+@property(nonatomic, strong) NSArray<NSSlider *> *sliders;
+@property(nonatomic, strong) NSArray<NSTextField *> *values;
+@property(nonatomic, strong) NSButton *glideCheckbox;
+@property(nonatomic, strong) NSButton *reverseCheckbox;
+- (void)refreshFromStore;
+- (void)valueChanged:(id)sender;
+@end
+
+@implementation SwsMacPanel
+
+- (instancetype)init
+{
+  NSPanel *panel =
+      [[NSPanel alloc] initWithContentRect:NSMakeRect(0, 0, 430, 342)
+                                styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
+                                          NSWindowStyleMaskUtilityWindow
+                                  backing:NSBackingStoreBuffered
+                                    defer:NO];
+  self = [super initWithWindow:panel];
+  if (!self)
+    return nil;
+
+  panel.title = @"Smooth Wheel Scroll";
+  panel.delegate = self;
+  panel.releasedWhenClosed = NO;
+  panel.hidesOnDeactivate = YES;
+  panel.level = NSFloatingWindowLevel;
+  [panel setFrameAutosaveName:@"SmoothWheelScrollMacSettings"];
+
+  NSView *content = panel.contentView;
+  _glideCheckbox = [NSButton checkboxWithTitle:@"Enable smooth scrolling"
+                                         target:self
+                                         action:@selector(valueChanged:)];
+  _glideCheckbox.frame = NSMakeRect(20, 306, 240, 24);
+  [content addSubview:_glideCheckbox];
+
+  _reverseCheckbox = [NSButton checkboxWithTitle:@"Reverse touchpad horizontal zoom"
+                                          target:self
+                                          action:@selector(valueChanged:)];
+  _reverseCheckbox.frame = NSMakeRect(20, 278, 330, 24);
+  [content addSubview:_reverseCheckbox];
+
+  NSArray<NSString *> *titles = @[
+    @"Glide length", @"Slow step", @"Ramp-up", @"Top speed"
+  ];
+  const double minima[] = {100.0, 1.0, 60.0, 1.0};
+  const double maxima[] = {300.0, 10.0, 2000.0, 2.0};
+  NSMutableArray<NSSlider *> *sliders = [NSMutableArray arrayWithCapacity:4];
+  NSMutableArray<NSTextField *> *values = [NSMutableArray arrayWithCapacity:4];
+
+  for (NSInteger i = 0; i < 4; ++i)
+  {
+    const CGFloat y = 232.0 - (CGFloat)i * 57.0;
+    NSTextField *label = [NSTextField labelWithString:titles[(NSUInteger)i]];
+    label.frame = NSMakeRect(20, y + 22, 230, 20);
+    [content addSubview:label];
+
+    NSTextField *value = [NSTextField labelWithString:@""];
+    value.alignment = NSTextAlignmentRight;
+    value.textColor = NSColor.secondaryLabelColor;
+    value.frame = NSMakeRect(260, y + 22, 150, 20);
+    [content addSubview:value];
+    [values addObject:value];
+
+    NSSlider *slider = [NSSlider sliderWithValue:minima[i]
+                                        minValue:minima[i]
+                                        maxValue:maxima[i]
+                                          target:self
+                                          action:@selector(valueChanged:)];
+    slider.tag = i;
+    slider.continuous = YES;
+    slider.frame = NSMakeRect(20, y, 390, 22);
+    [content addSubview:slider];
+    [sliders addObject:slider];
+  }
+  _sliders = sliders;
+  _values = values;
+
+  NSTextField *note =
+      [NSTextField labelWithString:@"Changes apply immediately and are stored in REAPER ExtState."];
+  note.textColor = NSColor.secondaryLabelColor;
+  note.font = [NSFont systemFontOfSize:11];
+  note.frame = NSMakeRect(20, 20, 390, 18);
+  [content addSubview:note];
+
+  [self refreshFromStore];
+  [panel center];
+  return self;
+}
+
+- (void)refreshFromStore
+{
+  PlatPanelSettings settings;
+  if (g_settingsBridge)
+    g_settingsBridge(&settings, false);
+
+  _glideCheckbox.state = settings.glideOn ? NSControlStateValueOn : NSControlStateValueOff;
+  _reverseCheckbox.state =
+      settings.touchpadReverse ? NSControlStateValueOn : NSControlStateValueOff;
+  const double values[] = {
+    settings.windowMs, settings.startDeltas, settings.budgetDeltas, settings.speedMul
+  };
+  for (NSInteger i = 0; i < 4; ++i)
+  {
+    NSSlider *slider = _sliders[(NSUInteger)i];
+    NSTextField *field = _values[(NSUInteger)i];
+    slider.doubleValue = values[i];
+    field.stringValue = FormatValue(i, values[i]);
+  }
+}
+
+- (void)valueChanged:(id)sender
+{
+  (void)sender;
+  PlatPanelSettings settings;
+  settings.glideOn = _glideCheckbox.state == NSControlStateValueOn;
+  settings.touchpadReverse = _reverseCheckbox.state == NSControlStateValueOn;
+  settings.windowMs = ((NSSlider *)_sliders[0]).doubleValue;
+  settings.startDeltas = ((NSSlider *)_sliders[1]).doubleValue;
+  settings.budgetDeltas = ((NSSlider *)_sliders[2]).doubleValue;
+  settings.speedMul = ((NSSlider *)_sliders[3]).doubleValue;
+  if (g_settingsBridge)
+    g_settingsBridge(&settings, true);
+
+  const double values[] = {
+    settings.windowMs, settings.startDeltas, settings.budgetDeltas, settings.speedMul
+  };
+  for (NSInteger i = 0; i < 4; ++i)
+  {
+    NSTextField *field = _values[(NSUInteger)i];
+    field.stringValue = FormatValue(i, values[i]);
+  }
+}
+
+@end
+
 namespace plat
 {
-bool PlatPanelPresent() { return false; }
+void PanelBindSettings(PlatPanelSettingsFn fn) { g_settingsBridge = fn; }
 
-// All five are no-ops because there is no panel to show. They are defined rather than omitted so
-// that the plugin's menu entry and its toggle action keep working: pressing "settings" on a Mac
-// build does nothing, which is clearer than a menu entry that is missing entirely (and than a crash
-// from a null pointer if some path forgot to check PlatPanelPresent).
-void PanelShow() {}
-void PanelToggle() {}
-bool PanelVisible() { return false; }
-void PanelRefresh() {}
+bool PlatPanelPresent() { return true; }
+
+void PanelShow()
+{
+  if (!g_panel)
+    g_panel = [[SwsMacPanel alloc] init];
+  [(SwsMacPanel *)g_panel refreshFromStore];
+  [(SwsMacPanel *)g_panel showWindow:nil];
+  [[(SwsMacPanel *)g_panel window] makeKeyAndOrderFront:nil];
+}
+
+void PanelToggle()
+{
+  if (!g_panel)
+  {
+    PanelShow();
+    return;
+  }
+  NSWindow *window = [(SwsMacPanel *)g_panel window];
+  if (window.visible)
+    [(SwsMacPanel *)g_panel close];
+  else
+    PanelShow();
+}
+
+bool PanelVisible()
+{
+  if (!g_panel)
+    return false;
+  NSWindow *window = [(SwsMacPanel *)g_panel window];
+  return window.visible;
+}
+
+void PanelRefresh()
+{
+  if (g_panel)
+    [(SwsMacPanel *)g_panel refreshFromStore];
+}
+
+void PanelShutdown()
+{
+  if (g_panel)
+  {
+    [(SwsMacPanel *)g_panel close];
+    g_panel = nil;
+  }
+  g_settingsBridge = nullptr;
+}
 
 } // namespace plat
