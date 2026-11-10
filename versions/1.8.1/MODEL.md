@@ -1,5 +1,9 @@
 # 1.8.1
 
+**Windows x64：成熟稳定版。**
+
+**macOS：开发阶段，不是正式版。** 需要真实 Mac 用户测试并反馈；欢迎开发者 fork 一起完善。
+
 ## 更新内容
 
 ```
@@ -58,22 +62,32 @@
 | macOS 共享核心 x86_64 / arm64 编译 | 通过 |
 | macOS GCD timer 与入口 x86_64 / arm64 编译 | 通过 |
 | macOS AppKit 编译、dylib 链接与入口导出 | GitHub Actions 通过 |
-| REAPER-on-macOS 实机行为 | 由用户验证 |
+| REAPER-on-macOS 实机行为 | 尚未验证，需要用户反馈 |
 
 ### 附件
 
 | 平台 | 文件 | 状态 |
 |---|---|---|
-| Windows x64 | `reaper_smoothwheelscroll-x64.dll` | 正式 |
+| Windows x64 | `reaper_smoothwheelscroll-x64.dll` | 成熟稳定 |
 | Windows ARM64 | `reaper_smoothwheelscroll-arm64.dll` | 测试 |
-| macOS arm64 | `reaper_smoothwheelscroll-mac-arm64.dylib` | 测试 |
-| macOS x86_64 | `reaper_smoothwheelscroll-mac-x86_64.dylib` | 测试 |
+| macOS arm64 | `reaper_smoothwheelscroll-mac-arm64.dylib` | 开发 |
+| macOS x86_64 | `reaper_smoothwheelscroll-mac-x86_64.dylib` | 开发 |
+
+### 修复：启动诊断与 macOS 开发状态
+
+- macOS 启动日志明确标记为开发构建，不是正式版。
+- 日志逐项报告启动入口、平台架构、REAPER 版本、启动结果、滚轮监视器、设置动作、设置面板和总开关。
+- macOS 日志区分 CI 已验证的编译/链接/导出与仍需真机确认的 REAPER 运行状态。
+- 日志提供鼠标滚轮、触控板、设置面板和重载测试项，并提供 issue 与 fork 入口。
+- 修正 Windows 启动日志中的陈旧版本号。
+
+macOS CI：`42731748567`，AppKit 编译、两架构链接、入口检查和 artifact 上传通过。
 
 ### SHA-256
 
 | 文件 | 字节 | SHA-256 |
 |---|---:|---|
 | `reaper_smoothwheelscroll-x64.dll` | 183119 | `2E9BC2EAC62F779D0EACCB66F2F003CE6E0B9AC450768799B3410D3872F6701E` |
-| `reaper_smoothwheelscroll-arm64.dll` | 256512 | `042063BB6BF69224B8E1B0D1E4EAFBC9F8D73B99829B4026A40DC1982C723F87` |
-| `reaper_smoothwheelscroll-mac-arm64.dylib` | 155248 | `DE8AF38F66FA920F94C636A0087ABB5A80F9921A20B72CFCDDC4C9ACB3F392C3` |
-| `reaper_smoothwheelscroll-mac-x86_64.dylib` | 149616 | `748F187B305EC0FCF9FF5F82D854EE3427ACE044BD24D3BCD2AF63A1535A91EC` |
+| `reaper_smoothwheelscroll-arm64.dll` | 256512 | `BF363C20C500F9EADB3D5C4F1ABEBEA0D67758253DAA10DCB9BF9EAFE63B6307` |
+| `reaper_smoothwheelscroll-mac-arm64.dylib` | 155248 | `A605880A8F7358CD9FB3D9900FC1720D113AB8EE7750C5C13DD92696D587B903` |
+| `reaper_smoothwheelscroll-mac-x86_64.dylib` | 149616 | `A621B0A7B2A217A0E2EB307CC392182313941ACBF06368751EC452EC5D153365` |
