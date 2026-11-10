@@ -7107,14 +7107,14 @@ static int SwsEntryImpl(void *hInstVoid, reaper_plugin_info_t *rec)
   // user's screenshot, which is often all we get.
 //
 // ★ THE VERSION SUFFIX SAYS WHICH BUILD THIS IS, and on macOS it must, because there the release is
-// a DEVELOPMENT BUILD. The suffix distinguishes the four artifacts shipped for 1.8.2: win-x64
+// a DEVELOPMENT BUILD. The suffix distinguishes the four artifacts shipped for 1.8.1: win-x64
 // (verified), win-arm64 (compiled, not run on ARM hardware), and the two macOS development builds.
 #ifdef SWS_WHEEL_LOG
-  rec->Register("ext_name", (void *)"Smooth Wheel Scroll 1.8.2 DEV (wheel log)");
+  rec->Register("ext_name", (void *)"Smooth Wheel Scroll 1.8.1 DEV (wheel log)");
 #elif defined(_WIN32)
-  rec->Register("ext_name", (void *)"Smooth Wheel Scroll 1.8.2");
+  rec->Register("ext_name", (void *)"Smooth Wheel Scroll 1.8.1");
 #else
-  rec->Register("ext_name", (void *)"Smooth Wheel Scroll 1.8.2 DEV (macOS development build)");
+  rec->Register("ext_name", (void *)"Smooth Wheel Scroll 1.8.1 DEV (macOS development build)");
 #endif
   rec->Register("ext_vendor", (void *)"SmoothWheelScroll");
 
@@ -7207,15 +7207,15 @@ static int SwsEntryImpl(void *hInstVoid, reaper_plugin_info_t *rec)
       Log("=== log file: %s", logPath);
 #ifdef _WIN32
 #if defined(_M_ARM64) || defined(__aarch64__)
-    Log("=== build: Windows ARM64 -- Smooth Wheel Scroll 1.8.2 TEST BUILD");
+    Log("=== build: Windows ARM64 -- Smooth Wheel Scroll 1.8.1 TEST BUILD");
 #else
-    Log("=== build: Windows x64 -- Smooth Wheel Scroll 1.8.2");
+    Log("=== build: Windows x64 -- Smooth Wheel Scroll 1.8.1");
 #endif
 #else
 #if defined(__aarch64__) || defined(__arm64__)
-    Log("=== build: macOS arm64 -- Smooth Wheel Scroll 1.8.2 DEVELOPMENT BUILD");
+    Log("=== build: macOS arm64 -- Smooth Wheel Scroll 1.8.1 DEVELOPMENT BUILD");
 #else
-    Log("=== build: macOS x86_64 -- Smooth Wheel Scroll 1.8.2 DEVELOPMENT BUILD");
+    Log("=== build: macOS x86_64 -- Smooth Wheel Scroll 1.8.1 DEVELOPMENT BUILD");
 #endif
 #endif
     if (GetAppVersion)
