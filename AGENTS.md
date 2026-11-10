@@ -11373,3 +11373,42 @@ return LastWheelDevice(useH) == Device::kTouchpad;
 - ✅ `test/check_macos.sh` 通过。
 - ❓ `wheel_mac.mm` 的 AppKit 部分、完整 dylib 链接和 REAPER 内运行只能由 macOS CI / 真机确认。
 - ⏸ **`kCoalesceMs=15.6` 没改**。这是 Mac 是否更顺滑的产品选择，必须真机 A/B 后由用户决定。
+
+---
+
+## 141. 发布 1.8.1（2026-11-10）
+
+用户确认本地使用“很丝滑”，并明确批准更新 GitHub、tag 和 release。
+
+### 版本
+
+- `ext_name`：`Smooth Wheel Scroll 1.8.1`
+- macOS 测试版：`Smooth Wheel Scroll 1.8.1 DEV (macOS test build)`
+- tag / release：**`v1.8.1`**
+
+### 提交
+
+- `14e9864`：macOS 局部监视、设备桥接、Cocoa 面板、卸载修复
+- `7d67579`：1.8.1 版本号与发布档案
+- `5c35c84`：完整 `versions/1.8.1` 快照与四个二进制
+
+### 验证
+
+- 原有 9 扇门 + `check_macos.sh` 全过。
+- Windows x64 / ARM64 重建；两者 `ext_name` 都是 1.8.1，导出只有 `ReaperPluginEntry`。
+- macOS CI run `42730218483` 成功：AppKit 编译、两架构链接、入口检查、artifact 上传均通过。
+- 快照源码与 `src/` 逐文件哈希一致。
+
+### 附件 SHA-256
+
+| 文件 | 字节 | SHA-256 |
+|---|---:|---|
+| `reaper_smoothwheelscroll-x64.dll` | 183119 | `2E9BC2EAC62F779D0EACCB66F2F003CE6E0B9AC450768799B3410D3872F6701E` |
+| `reaper_smoothwheelscroll-arm64.dll` | 256512 | `042063BB6BF69224B8E1B0D1E4EAFBC9F8D73B99829B4026A40DC1982C723F87` |
+| `reaper_smoothwheelscroll-mac-arm64.dylib` | 155248 | `DE8AF38F66FA920F94C636A0087ABB5A80F9921A20B72CFCDDC4C9ACB3F392C3` |
+| `reaper_smoothwheelscroll-mac-x86_64.dylib` | 149616 | `748F187B305EC0FCF9FF5F82D854EE3427ACE044BD24D3BCD2AF63A1535A91EC` |
+
+### 发布日志
+
+严格按用户规则：只写“改了什么”，中英对应，按 `*` / `+` / `#` 分组，条目放在代码块内。
+注意事项、用法、原理、MD5/SHA 和开发过程都不进 release 说明。
