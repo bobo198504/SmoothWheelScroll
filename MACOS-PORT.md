@@ -3,6 +3,9 @@
 Read this before touching `src/platform/`. It separates what is built and source-checked from what
 still requires a real Mac running REAPER.
 
+> **Development build, not a production release.** Windows x64 is the mature stable build. macOS
+> still requires physical-Mac testing and feedback. Developers are welcome to fork the repository.
+
 ## 1. Current state
 
 | Piece | State |
@@ -14,7 +17,7 @@ still requires a real Mac running REAPER.
 | `src/platform/mac/time_mac.mm` | GCD timer; both architectures compile locally with Zig |
 | `src/platform/mac/entry_mac.mm` | REAPER entry/unload wrapper; x86_64 compiles locally with Zig |
 | Full `.dylib` link | must be run by `.github/workflows/macos.yml` after this change |
-| REAPER on a physical Mac | **not verified here** |
+| REAPER on a physical Mac | **not verified; development build** |
 
 `test/check_macos.sh` guards the source contract. It is not a substitute for loading the dylib in
 REAPER.
@@ -127,8 +130,10 @@ The macOS build always writes:
 open -e "$TMPDIR/SmoothWheelScroll.log"
 ```
 
-Startup records the log path, build, REAPER version, observer state and master switch. Missing wheel
-input lines point to the local monitor or action pairing; do not start by changing the model.
+Startup records the log path, architecture, REAPER version, startup result, observer state, settings
+action, settings panel, master switch and the exact checks the user should perform. It also states
+which facts CI proved and that REAPER-on-macOS runtime evidence comes from this report. Feedback
+should include the log, Mac architecture and observed behaviour.
 
 ## 8. Verification
 

@@ -5,6 +5,9 @@
 
 一个原生 REAPER 扩展：把普通鼠标滚轮驱动的滚动/缩放变成平滑动画，**不改变滚轮原本做什么**。
 
+> **macOS 状态：开发阶段，不是正式版。** 当前构建仍需要真实 Mac 用户测试并反馈；
+> 欢迎会开发的用户 fork 一份，一起完善 macOS 支持。
+
 [English](README.en.md)
 
 <p align="center">
@@ -89,11 +92,13 @@ Windows x64 安装步骤：
 2. 放进 `UserPlugins`：便携版 `<REAPER>/UserPlugins/`，普通安装 `%APPDATA%\REAPER\UserPlugins\`。
 3. 重启 REAPER。
 
-加载后显示为 `Smooth Wheel Scroll 1.8.1`；测试版会带 `DEV` 标记。
+加载后显示为 `Smooth Wheel Scroll 1.8.2`；测试版会带 `DEV` 标记。
 
 macOS 把与 `uname -m` 对应的 `.dylib` 放进
 `~/Library/Application Support/REAPER/UserPlugins/`，然后重启 REAPER。macOS 版使用进程内
 AppKit 监视器，**不需要辅助功能权限**。日志在 `$TMPDIR/SmoothWheelScroll.log`。
+日志开头会分别列出构建/链接验证、REAPER 内运行状态、滚轮监视器、设置动作和设置面板；
+反馈问题时请一并提供该文件和 Mac 架构。
 
 ### 设置面板
 

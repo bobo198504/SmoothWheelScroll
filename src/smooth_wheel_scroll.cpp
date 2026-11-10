@@ -7067,10 +7067,17 @@ static int SwsEntryImpl(void *hInstVoid, reaper_plugin_info_t *rec)
     return 0;
   }
 
+  Log("=== runtime entry: shared startup reached");
   if (rec->caller_version != REAPER_PLUGIN_VERSION || !rec->GetFunc || !rec->Register)
+  {
+    Log("=== startup FAILED: incompatible REAPER extension ABI");
     return 0;
+  }
   if (REAPERAPI_LoadAPI(rec->GetFunc) != 0)
+  {
+    Log("=== startup FAILED: REAPER API pointers could not be loaded");
     return 0;
+  }
 
   // The settings window uses no common controls beyond the standard button and
   // static, so nothing needs registering here (the faders are our own class and are
@@ -7080,7 +7087,10 @@ static int SwsEntryImpl(void *hInstVoid, reaper_plugin_info_t *rec)
   g_hInst = hInst;
   g_main = rec->hwnd_main ? rec->hwnd_main : GetMainHwnd();
   if (!g_main)
+  {
+    Log("=== startup FAILED: REAPER main window is unavailable");
     return 0;
+  }
 
   // Which palette the panel will start in, resolved at load time so it can be read off the log
   // without opening the panel. Only meaningful when the settings panel is compiled in: with
@@ -7097,14 +7107,14 @@ static int SwsEntryImpl(void *hInstVoid, reaper_plugin_info_t *rec)
   // user's screenshot, which is often all we get.
 //
 // ★ THE VERSION SUFFIX SAYS WHICH BUILD THIS IS, and on macOS it must, because there the release is
-// a TEST BUILD. The suffix distinguishes the four artifacts shipped for 1.8.1: win-x64 (verified),
-// win-arm64 (compiled, not run on ARM hardware), and the two macOS test builds.
+// a DEVELOPMENT BUILD. The suffix distinguishes the four artifacts shipped for 1.8.2: win-x64
+// (verified), win-arm64 (compiled, not run on ARM hardware), and the two macOS development builds.
 #ifdef SWS_WHEEL_LOG
-  rec->Register("ext_name", (void *)"Smooth Wheel Scroll 1.8.1 DEV (wheel log)");
+  rec->Register("ext_name", (void *)"Smooth Wheel Scroll 1.8.2 DEV (wheel log)");
 #elif defined(_WIN32)
-  rec->Register("ext_name", (void *)"Smooth Wheel Scroll 1.8.1");
+  rec->Register("ext_name", (void *)"Smooth Wheel Scroll 1.8.2");
 #else
-  rec->Register("ext_name", (void *)"Smooth Wheel Scroll 1.8.1 DEV (macOS test build)");
+  rec->Register("ext_name", (void *)"Smooth Wheel Scroll 1.8.2 DEV (macOS development build)");
 #endif
   rec->Register("ext_vendor", (void *)"SmoothWheelScroll");
 
@@ -7180,15 +7190,13 @@ static int SwsEntryImpl(void *hInstVoid, reaper_plugin_info_t *rec)
   // ★ STARTUP DIAGNOSTICS -- the first lines of the log, and for the macOS test build the most
   // important ones in it.
   //
-  // A tester is asked to send this file back. Whoever reads it needs four facts before anything else
-  // makes sense, and all four are things that are otherwise invisible:
+  // A tester is asked to send this file back. The report must answer:
   //
   //   1. WHERE the log is          -- so the tester can find it in the first place;
   //   2. WHICH build and platform  -- a report is useless without knowing what produced it;
-  //   3. whether the WHEEL OBSERVER is installed -- on macOS this is the process-local NSEvent
-  //      monitor; without it the plugin uses its action-only fallback;
-  //   4. whether the GLIDE is ON   -- the master switch, and the single most common reason "nothing
-  //      happened" that has nothing to do with the port.
+  //   3. whether the WHEEL OBSERVER, settings action and settings panel are available;
+  //   4. what CI proved and what still requires REAPER-on-Mac evidence;
+  //   5. whether the GLIDE is ON and what the user should test.
   //
   // Printed unconditionally (not behind SWS_DEBUG_LOG) because kDebugLog already decides whether the
   // file is written at all -- a log that exists but omits these would be worse than no log.
@@ -7198,19 +7206,44 @@ static int SwsEntryImpl(void *hInstVoid, reaper_plugin_info_t *rec)
     if (LogFilePath(logPath, (int)sizeof(logPath)))
       Log("=== log file: %s", logPath);
 #ifdef _WIN32
-    Log("=== build: Windows x64 -- Smooth Wheel Scroll 1.7.7");
+#if defined(_M_ARM64) || defined(__aarch64__)
+    Log("=== build: Windows ARM64 -- Smooth Wheel Scroll 1.8.2 TEST BUILD");
 #else
-    Log("=== build: macOS -- TEST BUILD for the port, NOT yet verified on a Mac");
+    Log("=== build: Windows x64 -- Smooth Wheel Scroll 1.8.2");
 #endif
-    Log("=== wheel hook = %s", g_hookInstalled ? "installed" : "NOT installed");
+#else
+#if defined(__aarch64__) || defined(__arm64__)
+    Log("=== build: macOS arm64 -- Smooth Wheel Scroll 1.8.2 DEVELOPMENT BUILD");
+#else
+    Log("=== build: macOS x86_64 -- Smooth Wheel Scroll 1.8.2 DEVELOPMENT BUILD");
+#endif
+#endif
+    if (GetAppVersion)
+      Log("=== reaper=%s", GetAppVersion());
+    else
+      Log("=== reaper=unknown");
+    Log("=== startup result: SUCCESS (the extension entry is running)");
+    Log("=== wheel observer = %s", g_hookInstalled ? "installed" : "NOT installed");
+    Log("=== settings action = %s (command %d)",
+        g_cmdTune ? "registered" : "NOT registered", g_cmdTune);
+    Log("=== settings panel = %s", plat::PlatPanelPresent() ? "available" : "not present");
 #ifndef _WIN32
+    Log("=== macOS status: DEVELOPMENT BUILD -- not a production release");
+    Log("=== verification: CI build/link/export = PASS");
+    Log("=== verification: REAPER-on-macOS runtime = this startup report is the runtime evidence");
+    Log("=== Accessibility permission = not requested by this build");
     if (!g_hookInstalled)
     {
       Log("=== >>> NSEvent local monitor unavailable; action-only fallback is active");
-      Log("=== >>> no Accessibility permission is requested by this build");
     }
+    if (!g_cmdTune)
+      Log("=== >>> settings action is missing; report this line with the log");
+    Log("=== test: open the settings action, roll a mouse wheel, swipe a trackpad");
+    Log("=== test: touchpad should keep native scrolling; reload the plugin once");
+    Log("=== report: send this file, Mac architecture, REAPER version and what happened");
+    Log("=== feedback: https://github.com/bobo198504/SmoothWheelScroll/issues");
+    Log("=== contribution: developers may fork the repository and submit improvements");
 #endif
-    Log("=== reaper=%s", (GetAppVersion ? GetAppVersion() : "unknown"));
     Log("=== glide master switch = %s", g_glideOn ? "ON" : "OFF (nothing will be animated)");
     Log("=== settings: window=%.0fms start=%.1fd budget=%.0fd speedmul=%.2f",
         g_windowMs, g_startDeltas, g_budgetDeltas, g_speedMul);

@@ -6,6 +6,9 @@
 A native REAPER extension that turns wheel-driven scrolling and zooming into a smooth animation —
 **without changing what the wheel does**.
 
+> **macOS status: development, not a production release.** Real-Mac testing and feedback are still
+> required. Developers are welcome to fork the project and help improve macOS support.
+
 [中文说明](README.md)
 
 <p align="center">
@@ -90,12 +93,14 @@ Windows x64 and a macOS arm64/x86_64 test build, for REAPER 7.
    `%APPDATA%\REAPER\UserPlugins\`.
 3. Restart REAPER.
 
-Once loaded it appears as `Smooth Wheel Scroll 1.8.1`; test builds carry a `DEV` marker.
+Once loaded it appears as `Smooth Wheel Scroll 1.8.2`; test builds carry a `DEV` marker.
 
 On macOS, put the `.dylib` matching `uname -m` into
 `~/Library/Application Support/REAPER/UserPlugins/` and restart REAPER. The macOS build uses an
 in-process AppKit monitor and **does not require Accessibility permission**. Its log is at
-`$TMPDIR/SmoothWheelScroll.log`.
+`$TMPDIR/SmoothWheelScroll.log`. The startup report separately identifies CI build verification,
+REAPER runtime evidence, the wheel observer, settings action and settings panel; include the log and
+Mac architecture in any report.
 
 ### Settings panel
 

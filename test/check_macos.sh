@@ -36,6 +36,19 @@ grep -q 'NSPanel' "$PANEL" ||
   fail "macOS settings panel is not a native Cocoa window"
 grep -q 'PanelShutdown' "$PANEL" "$MAIN" ||
   fail "Cocoa panel is not destroyed during plugin unload"
+grep -q 'REAPER-on-macOS runtime' "$MAIN" ||
+  fail "macOS log does not distinguish CI verification from REAPER runtime evidence"
+grep -q 'settings action = ' "$MAIN" ||
+  fail "macOS log does not report whether the settings action registered"
+grep -q 'Accessibility permission = not requested' "$MAIN" ||
+  fail "macOS log does not state the permission requirement"
+grep -q 'macOS status: DEVELOPMENT BUILD' "$MAIN" ||
+  fail "macOS log does not state its development status"
+grep -q 'developers may fork' "$MAIN" ||
+  fail "macOS log does not include the contribution route"
+if grep -q 'Smooth Wheel Scroll 1.7.7' "$MAIN"; then
+  fail "stale build version in startup diagnostics"
+fi
 
 REMOVE_ALL="$(sed -n '/static void RemoveAll()/,/^}/p' "$MAIN")"
 printf '%s\n' "$REMOVE_ALL" | grep -q 'plat::WheelHookRemove();' ||
