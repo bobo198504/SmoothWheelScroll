@@ -26,7 +26,7 @@ on:
       - '.github/workflows/macos.yml'
 
 permissions:
-  contents: write # needed to attach the artifacts to a release
+  contents: read
 
 jobs:
   build:
@@ -76,25 +76,3 @@ jobs:
           name: macos-dylibs
           path: build/*.dylib
           if-no-files-found: error
-
-      # Only on a tag, and only if the build actually produced both files: attaching a broken or
-      # partial set to a published release is worse than attaching nothing.
-      - name: Attach to the release
-        if: startsWith(github.ref, 'refs/tags/v')
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          tag="${GITHUB_REF#refs/tags/}"
-          count=$(ls build/*.dylib 2>/dev/null | wc -l | tr -d ' ')
-          if [ "$count" -ne 2 ]; then
-            echo "expected 2 dylibs, found $count -- not touching the release"
-            exit 1
-          fi
-          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$tag" build/*.dylib --clobber --repo "$GITHUB_REPOSITORY"
-          else
-            # A tag can be pushed before its release page is created. Keep the green build and its
-            # downloadable workflow artifact; do not turn "release not created yet" into a build
-            # failure that hides perfectly good dylibs.
-            echo "release $tag does not exist yet; leaving the dylibs as workflow artifacts"
-          fi

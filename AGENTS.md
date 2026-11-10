@@ -11363,8 +11363,8 @@ return LastWheelDevice(useH) == Device::kTouchpad;
 - 新增 `test/check_macos.sh`：守住“局部 monitor、不是 CGEventTap、共享层读取快照、
   卸载调用、构建有 blocks”。它在 Windows Git Bash 可跑。
 - `README*.md` 删除“Mac 要辅助功能”“所有平台都有设置面板”“仅 Windows”等过期说法。
-- macOS CI 先跑该门再构建；release 页面还没创建时，保留 workflow artifact，不把上传失败
-  误报成构建失败。
+- macOS CI 先跑该门再构建，只保留 workflow artifact；**不自动修改 release**，避免 tag 触发的
+  二次构建用不同签名/哈希覆盖已经核对并写入快照的附件。
 
 ### 五、验证边界
 
@@ -11412,3 +11412,8 @@ return LastWheelDevice(useH) == Device::kTouchpad;
 
 严格按用户规则：只写“改了什么”，中英对应，按 `*` / `+` / `#` 分组，条目放在代码块内。
 注意事项、用法、原理、MD5/SHA 和开发过程都不进 release 说明。
+
+### 发布后修正
+
+tag 推送自动触发了第二次 macOS 构建。为避免它在 release 创建后覆盖人工上传的同名附件，
+该次 run `42730557079` 已取消；workflow 随后改成只验证、保存 artifact，不再写 release。
