@@ -68,3 +68,12 @@
 | Windows ARM64 | `reaper_smoothwheelscroll-arm64.dll` | 测试 |
 | macOS arm64 | `reaper_smoothwheelscroll-mac-arm64.dylib` | 测试 |
 | macOS x86_64 | `reaper_smoothwheelscroll-mac-x86_64.dylib` | 测试 |
+
+### SHA-256
+
+| 文件 | 字节 | SHA-256 |
+|---|---:|---|
+| `reaper_smoothwheelscroll-x64.dll` | 183119 | `2E9BC2EAC62F779D0EACCB66F2F003CE6E0B9AC450768799B3410D3872F6701E` |
+| `reaper_smoothwheelscroll-arm64.dll` | 256512 | `042063BB6BF69224B8E1B0D1E4EAFBC9F8D73B99829B4026A40DC1982C723F87` |
+| `reaper_smoothwheelscroll-mac-arm64.dylib` | 155248 | `DE8AF38F66FA920F94C636A0087ABB5A80F9921A20B72CFCDDC4C9ACB3F392C3` |
+| `reaper_smoothwheelscroll-mac-x86_64.dylib` | 149616 | `748F187B305EC0FCF9FF5F82D854EE3427ACE044BD24D3BCD2AF63A1535A91EC` |
